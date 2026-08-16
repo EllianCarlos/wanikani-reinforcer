@@ -931,3 +931,68 @@ void Store::insert_drill_result(const DrillResult& result) {
     }
     sqlite3_finalize(stmt);
 }
+
+std::vector<DrillResult> Store::all_drill_results() {
+    static const char* sql = "SELECT subject_id, distractor_id, correct, answered_at FROM drill_result;";
+
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+        throw std::runtime_error(std::string("prepare all_drill_results failed: ") + sqlite3_errmsg(db_));
+    }
+
+    std::vector<DrillResult> results;
+    int rc;
+    while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+        DrillResult result;
+        result.subject_id = sqlite3_column_int64(stmt, 0);
+        result.distractor_id = sqlite3_column_int64(stmt, 1);
+        result.correct = sqlite3_column_int(stmt, 2) != 0;
+        const unsigned char* answered = sqlite3_column_text(stmt, 3);
+        result.answered_at = answered != nullptr ? reinterpret_cast<const char*>(answered) : "";
+        results.push_back(std::move(result));
+    }
+    if (rc != SQLITE_DONE) {
+        const std::string message = sqlite3_errmsg(db_);
+        sqlite3_finalize(stmt);
+        throw std::runtime_error("all_drill_results failed: " + message);
+    }
+    sqlite3_finalize(stmt);
+    return results;
+}
+
+std::vector<ReviewStat> Store::stat_snapshots_for(long long subject_id) {
+    static const char* sql =
+        "SELECT data_updated_at, meaning_correct, meaning_incorrect, reading_correct, reading_incorrect, "
+        "meaning_current_streak, reading_current_streak, percentage_correct FROM stat_snapshot "
+        "WHERE subject_id = ? ORDER BY data_updated_at ASC;";
+
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+        throw std::runtime_error(std::string("prepare stat_snapshots_for failed: ") + sqlite3_errmsg(db_));
+    }
+    sqlite3_bind_int64(stmt, 1, subject_id);
+
+    std::vector<ReviewStat> stats;
+    int rc;
+    while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+        ReviewStat stat;
+        stat.subject_id = subject_id;
+        const unsigned char* updated = sqlite3_column_text(stmt, 0);
+        stat.data_updated_at = updated != nullptr ? reinterpret_cast<const char*>(updated) : "";
+        stat.meaning_correct = sqlite3_column_int(stmt, 1);
+        stat.meaning_incorrect = sqlite3_column_int(stmt, 2);
+        stat.reading_correct = sqlite3_column_int(stmt, 3);
+        stat.reading_incorrect = sqlite3_column_int(stmt, 4);
+        stat.meaning_current_streak = sqlite3_column_int(stmt, 5);
+        stat.reading_current_streak = sqlite3_column_int(stmt, 6);
+        stat.percentage_correct = sqlite3_column_int(stmt, 7);
+        stats.push_back(stat);
+    }
+    if (rc != SQLITE_DONE) {
+        const std::string message = sqlite3_errmsg(db_);
+        sqlite3_finalize(stmt);
+        throw std::runtime_error("stat_snapshots_for failed: " + message);
+    }
+    sqlite3_finalize(stmt);
+    return stats;
+}

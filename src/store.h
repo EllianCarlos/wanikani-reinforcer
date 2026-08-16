@@ -132,6 +132,17 @@ public:
     // this table exists purely for wkr's own local history).
     void insert_drill_result(const DrillResult& result);
 
+    // Every drill_result row, unordered (callers that need chronological
+    // order, like stats.cpp's compute_drill_stats, sort their own copy).
+    std::vector<DrillResult> all_drill_results();
+
+    // Every stat_snapshot row for `subject_id`, ordered by
+    // data_updated_at ascending -- the full history
+    // Store::latest_stat_per_subject discards down to one row per
+    // subject. subject_type is left empty (stat_snapshot does not
+    // persist it; see latest_stat_per_subject's same limitation).
+    std::vector<ReviewStat> stat_snapshots_for(long long subject_id);
+
 private:
     sqlite3* db_ = nullptr;
 };
