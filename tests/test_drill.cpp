@@ -407,6 +407,43 @@ TEST_CASE("forced-choice meaning question accepts a distractor via its StudyMate
     CHECK(std::get<2>(rows[0]) == true);
 }
 
+TEST_CASE("production wrong-answer feedback lists every accepted meaning and synonym, not just the "
+          "primary one",
+          "[drill][regression]") {
+    Subject fat;
+    fat.id = 41;
+    fat.characters = "太";
+    fat.slug = "fat";
+    fat.level = 1;
+    fat.meanings = {Meaning{"Fat", true, true}, Meaning{"Chubby", false, true}};
+
+    wk_api::StudyMaterial material;
+    material.subject_id = fat.id;
+    material.meaning_synonyms = {"Porky"};
+
+    Subject dog;
+    dog.id = 42;
+    dog.characters = "犬";
+    dog.slug = "dog";
+    dog.level = 1;
+    dog.meanings = {Meaning{"Dog", true, true}};
+
+    const std::string db_path = temp_db_path("full_accepted_list");
+    std::filesystem::remove(db_path);
+    Store store(db_path);
+
+    // Q1 forced-choice, Q2 production (see drill.h's alternation rule) --
+    // quiz dog first just to reach Q2 as a production question on fat.
+    std::istringstream in("1\nnope\n");
+    std::ostringstream out;
+    run_drill({make_pair(42, 41), make_pair(41, 42)}, {fat, dog}, {material}, store, /*question_count=*/2, in,
+              out);
+
+    const std::string output = out.str();
+    CAPTURE(output);
+    CHECK(output.find("Incorrect. Accepted answers: Fat, Chubby, Porky") != std::string::npos);
+}
+
 TEST_CASE("run_drill stops early on EOF mid-drill and prints a partial score", "[drill]") {
     const std::string db_path = temp_db_path("eof");
     std::filesystem::remove(db_path);
