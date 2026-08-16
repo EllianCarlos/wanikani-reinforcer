@@ -381,6 +381,27 @@ bool run_forced_choice_question(const ConfusionPair& pair, bool ask_reading, int
     return is_correct;
 }
 
+// Every text that would grade a production answer correct for `subject`:
+// its accepted-answer meanings (primary and non-primary) followed by
+// every StudyMaterial synonym, in that order. Feeds the wrong-answer
+// feedback line in run_production_question, so a user can see everything
+// that would have counted -- including their own custom synonyms.
+std::vector<std::string> accepted_answer_texts(const Subject& subject,
+                                                const std::optional<wk_api::StudyMaterial>& study_material) {
+    std::vector<std::string> texts;
+    for (const auto& m : subject.meanings) {
+        if (m.accepted_answer) {
+            texts.push_back(m.meaning);
+        }
+    }
+    if (study_material.has_value()) {
+        for (const auto& synonym : study_material->meaning_synonyms) {
+            texts.push_back(synonym);
+        }
+    }
+    return texts;
+}
+
 // Runs one production question about `pair`: shows `a_id`'s characters
 // and asks for its meaning, matched via matches_answer. `b_id` is always
 // the distractor_id written to drill_result, per the brief. Returns true
@@ -411,9 +432,17 @@ bool run_production_question(const ConfusionPair& pair,
     if (is_correct) {
         out << colorize("Correct!", kColorGreen, use_color) << "\n";
     } else {
-        const Meaning* m = primary_meaning(quizzed_subject);
-        out << colorize("Incorrect.", kColorRed, use_color) << " Accepted answer: "
-            << (m != nullptr ? m->meaning : display_name(quizzed_subject)) << "\n";
+        const std::vector<std::string> accepted = accepted_answer_texts(quizzed_subject, study_material);
+        std::ostringstream accepted_joined;
+        for (size_t i = 0; i < accepted.size(); ++i) {
+            if (i > 0) {
+                accepted_joined << ", ";
+            }
+            accepted_joined << accepted[i];
+        }
+        out << colorize("Incorrect.", kColorRed, use_color) << " Accepted answer"
+            << (accepted.size() == 1 ? ": " : "s: ")
+            << (accepted.empty() ? display_name(quizzed_subject) : accepted_joined.str()) << "\n";
         out << first_advice_line(quizzed_subject, confusable_subject, pair.dominant_kind, FailureKind::Meaning,
                                   study_material, all_subjects)
             << "\n";
