@@ -244,7 +244,8 @@ int parse_choice(const std::string& raw_input, const std::vector<const Subject*>
 // compared case-insensitively against the option's accepted meanings
 // plus its whitelisted auxiliary meanings -- the same set WaniKani
 // itself would accept.
-bool option_also_has_shown_text(const Subject& option, const std::string& shown_text, bool reading_axis) {
+bool option_also_has_shown_text(const Subject& option, const std::string& shown_text, bool reading_axis,
+                                 const std::optional<wk_api::StudyMaterial>& option_study_material) {
     const std::string wanted = trim(shown_text);
     if (wanted.empty()) {
         return false;
@@ -268,6 +269,18 @@ bool option_also_has_shown_text(const Subject& option, const std::string& shown_
     for (const auto& am : option.auxiliary_meanings) {
         if (am.type == "whitelist" && lower(trim(am.meaning)) == lowered) {
             return true;
+        }
+    }
+    // A custom meaning synonym on the option's own StudyMaterial is just
+    // as legitimate an answer as its accepted_answer meanings -- this is
+    // the same set matches_answer already honors for production
+    // questions; forced-choice grading was missing it (see the
+    // "StudyMaterial synonym" regression test in test_drill.cpp).
+    if (option_study_material.has_value()) {
+        for (const auto& synonym : option_study_material->meaning_synonyms) {
+            if (lower(trim(synonym)) == lowered) {
+                return true;
+            }
         }
     }
     return false;
@@ -334,13 +347,20 @@ bool run_forced_choice_question(const ConfusionPair& pair, bool ask_reading, int
     }
 
     const int chosen = parse_choice(line, options);
+    std::optional<wk_api::StudyMaterial> chosen_study_material;
+    if (chosen >= 0) {
+        const auto it = study_material_by_id.find(options[static_cast<size_t>(chosen)]->id);
+        if (it != study_material_by_id.end()) {
+            chosen_study_material = *it->second;
+        }
+    }
     // Accept either the designated correct option or any other option
     // that legitimately shares the shown reading/meaning -- see
     // option_also_has_shown_text.
     const bool is_correct =
         chosen >= 0 && (static_cast<size_t>(chosen) == correct_index ||
                         option_also_has_shown_text(*options[static_cast<size_t>(chosen)], shown_text,
-                                                    used_reading));
+                                                    used_reading, chosen_study_material));
 
     if (is_correct) {
         out << colorize("Correct!", kColorGreen, use_color) << "\n";
