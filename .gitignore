@@ -1,0 +1,14 @@
+# Build artifacts
+build/
+*.o
+*.a
+*.so
+
+# SDD workspace (ephemeral, not project history)
+.superpowers/
+
+# Local runtime data
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
