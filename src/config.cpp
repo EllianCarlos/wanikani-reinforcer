@@ -74,23 +74,25 @@ std::string read_token_file(const std::string& config_dir) {
     return trim(contents.str());
 }
 
+}  // namespace
+
 // Resolves the token and paths from scratch: reads the token file (and
-// its permission mode) and creates the data dir. Config::load() below
-// caches the result so this only runs once per process — otherwise every
+// its permission mode) and creates the data dir. Config::load() caches
+// the result so this only runs once per process — otherwise every
 // http::get() call (which resolves its own token) would re-read the
 // token file and re-print the 0600 warning.
-Config resolve() {
+//
+// A missing token is not an error here: the paths are resolved
+// unconditionally so the purely-local commands (`report`, `drill`) can
+// find the database without a token. require_token() raises the failure
+// instead, at the point a token is actually needed.
+Config Config::resolve() {
     Config config;
 
     std::string token = env_or("WANIKANI_API_TOKEN", "");
-    std::string config_dir = resolve_config_dir();
+    config.config_dir = resolve_config_dir();
     if (token.empty()) {
-        token = read_token_file(config_dir);
-    }
-    if (token.empty()) {
-        throw std::runtime_error(
-            "no WaniKani API token found: set WANIKANI_API_TOKEN or create "
-            + config_dir + "/token");
+        token = read_token_file(config.config_dir);
     }
 
     config.api_token = token;
@@ -101,9 +103,16 @@ Config resolve() {
     return config;
 }
 
-}  // namespace
-
 Config Config::load() {
-    static const Config cached = resolve();
+    static const Config cached = Config::resolve();
     return cached;
+}
+
+const std::string& Config::require_token() const {
+    if (api_token.empty()) {
+        throw std::runtime_error(
+            "no WaniKani API token found: set WANIKANI_API_TOKEN or create "
+            + config_dir + "/token");
+    }
+    return api_token;
 }

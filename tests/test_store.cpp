@@ -74,6 +74,31 @@ TEST_CASE("upsert_subject is idempotent", "[store]") {
     REQUIRE(store.subject_count() == 1);
 }
 
+TEST_CASE("explicit transactions commit and roll back the writes they wrap", "[store]") {
+    // The batching primitive the sync path uses to avoid one implicit WAL
+    // transaction per row (~27k of them on a first sync). Correctness of
+    // the wrapped writes is what matters here: committed work must
+    // persist, rolled-back work must vanish.
+    const std::string db_path = temp_db_path("transactions");
+    std::filesystem::remove(db_path);
+    Store store(db_path);
+
+    store.begin_transaction();
+    store.upsert_subject(make_subject(1, "2020-01-01T00:00:00.000000Z"));
+    store.upsert_subject(make_subject(2, "2020-01-01T00:00:00.000000Z"));
+    store.commit_transaction();
+    REQUIRE(store.subject_count() == 2);
+
+    store.begin_transaction();
+    store.upsert_subject(make_subject(3, "2020-01-01T00:00:00.000000Z"));
+    store.rollback_transaction();
+    CHECK(store.subject_count() == 2);
+
+    // The store is usable again afterwards (no transaction left open).
+    store.upsert_subject(make_subject(4, "2020-01-01T00:00:00.000000Z"));
+    CHECK(store.subject_count() == 3);
+}
+
 TEST_CASE("upsert_subject replaces the row on re-sync with updated data", "[store]") {
     const std::string db_path = temp_db_path("replace");
     std::filesystem::remove(db_path);
