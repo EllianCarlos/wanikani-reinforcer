@@ -9,6 +9,7 @@
 
 #include "config.h"
 #include "confusion.h"
+#include "drill.h"
 #include "model.h"
 #include "report.h"
 #include "similarity.h"
@@ -189,13 +190,47 @@ int run_report() {
     }
 }
 
-int run_drill() {
-    std::cout << "not implemented yet" << std::endl;
-    return 0;
+// Named distinctly from drill.h's run_drill (which this wraps) to avoid
+// two same-named functions with different signatures living in the same
+// translation unit -- confusing even though legal overloading.
+int run_drill_command(int question_count) {
+    try {
+        Config config = Config::load();
+        Store store(config.db_path);
+
+        const std::vector<Subject> subjects = store.all_subjects();
+        if (subjects.empty()) {
+            std::cout << "No data yet — run 'wkr sync' first." << std::endl;
+            return 0;
+        }
+
+        const std::vector<ReviewStat> latest_stats = store.latest_stat_per_subject();
+        const std::vector<Session> sessions = store.all_sessions();
+        const std::vector<FailureEvent> events = store.all_failure_events();
+        const std::vector<SimilarityEdge> edges = store.all_similarity_edges();
+        const std::vector<Assignment> assignments = store.all_assignments();
+        (void)assignments;  // loaded for parity with `report`'s data-loading pattern; unused by drill
+        const std::vector<wk_api::StudyMaterial> study_materials = store.all_study_materials();
+
+        const std::vector<LeechEntry> leeches = compute_leech_scores(latest_stats);
+        const std::vector<ConfusionPair> pairs =
+            compute_confusion_pairs(sessions, events, edges, leeches, now_iso8601());
+
+        if (pairs.empty()) {
+            std::cout << "No confusion pairs yet — keep reviewing and run 'wkr sync' again." << std::endl;
+            return 0;
+        }
+
+        run_drill(pairs, subjects, study_materials, store, question_count, std::cin, std::cout);
+        return 0;
+    } catch (const std::exception& e) {
+        std::cerr << "error: " << e.what() << std::endl;
+        return 1;
+    }
 }
 
 void print_usage() {
-    std::cerr << "usage: wkr <sync [--session-gap-minutes N]|report|drill>" << std::endl;
+    std::cerr << "usage: wkr <sync [--session-gap-minutes N]|report|drill [--count N]>" << std::endl;
 }
 
 constexpr int kDefaultSessionGapMinutes = 45;
@@ -222,6 +257,27 @@ int parse_session_gap_minutes(int argc, char** argv) {
     return kDefaultSessionGapMinutes;
 }
 
+// Parses `--count N` out of argv[2..], following the same convention as
+// parse_session_gap_minutes above. Returns kDefaultDrillQuestionCount if
+// the flag is absent.
+int parse_drill_count(int argc, char** argv) {
+    for (int i = 2; i < argc; ++i) {
+        const std::string arg = argv[i];
+        if (arg == "--count") {
+            if (i + 1 >= argc) {
+                throw std::runtime_error("--count requires a value");
+            }
+            const std::string value = argv[i + 1];
+            try {
+                return std::stoi(value);
+            } catch (const std::exception&) {
+                throw std::runtime_error("--count value must be an integer, got: " + value);
+            }
+        }
+    }
+    return kDefaultDrillQuestionCount;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -243,7 +299,12 @@ int main(int argc, char** argv) {
         return run_report();
     }
     if (command == "drill") {
-        return run_drill();
+        try {
+            return run_drill_command(parse_drill_count(argc, argv));
+        } catch (const std::exception& e) {
+            std::cerr << "error: " << e.what() << std::endl;
+            return 1;
+        }
     }
 
     print_usage();
