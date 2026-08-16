@@ -4,11 +4,52 @@
 
 #include <nlohmann/json.hpp>
 
+#include <array>
+#include <chrono>
+#include <cstdio>
+#include <ctime>
 #include <stdexcept>
 
 namespace {
 
 using nlohmann::json;
+
+// FailureKind <-> the failure_event.kind TEXT column, which the schema
+// constrains to 'meaning' | 'reading' | 'both'.
+std::string failure_kind_to_text(FailureKind kind) {
+    switch (kind) {
+        case FailureKind::Meaning:
+            return "meaning";
+        case FailureKind::Reading:
+            return "reading";
+        case FailureKind::Both:
+            return "both";
+    }
+    return "meaning";  // unreachable; keeps -Wall happy about return paths
+}
+
+FailureKind failure_kind_from_text(const std::string& text) {
+    if (text == "reading") {
+        return FailureKind::Reading;
+    }
+    if (text == "both") {
+        return FailureKind::Both;
+    }
+    return FailureKind::Meaning;
+}
+
+// Current UTC time formatted like WaniKani's own timestamps
+// ("2026-08-16T03:14:07Z"), used to stamp stat_snapshot.fetched_at —
+// there's no API-provided value for "when did wkr observe this row".
+std::string now_iso8601() {
+    const std::time_t now = std::time(nullptr);
+    std::tm utc{};
+    gmtime_r(&now, &utc);
+    std::array<char, 32> buf{};
+    std::snprintf(buf.data(), buf.size(), "%04d-%02d-%02dT%02d:%02d:%02dZ", utc.tm_year + 1900,
+                  utc.tm_mon + 1, utc.tm_mday, utc.tm_hour, utc.tm_min, utc.tm_sec);
+    return std::string(buf.data());
+}
 
 // The plan's schema is one block, not phased: create every table now so
 // later tasks only add queries against tables that already exist.
@@ -213,4 +254,242 @@ int Store::subject_count() {
     }
     sqlite3_finalize(stmt);
     return count;
+}
+
+bool Store::insert_stat_snapshot(const ReviewStat& stat) {
+    static const char* sql =
+        "INSERT OR IGNORE INTO stat_snapshot "
+        "(subject_id, data_updated_at, fetched_at, meaning_correct, meaning_incorrect, "
+        "reading_correct, reading_incorrect, meaning_current_streak, reading_current_streak, "
+        "percentage_correct) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);";
+
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+        throw std::runtime_error(std::string("prepare insert_stat_snapshot failed: ") +
+                                  sqlite3_errmsg(db_));
+    }
+
+    const std::string fetched_at = now_iso8601();
+    sqlite3_bind_int64(stmt, 1, stat.subject_id);
+    sqlite3_bind_text(stmt, 2, stat.data_updated_at.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 3, fetched_at.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int(stmt, 4, stat.meaning_correct);
+    sqlite3_bind_int(stmt, 5, stat.meaning_incorrect);
+    sqlite3_bind_int(stmt, 6, stat.reading_correct);
+    sqlite3_bind_int(stmt, 7, stat.reading_incorrect);
+    sqlite3_bind_int(stmt, 8, stat.meaning_current_streak);
+    sqlite3_bind_int(stmt, 9, stat.reading_current_streak);
+    sqlite3_bind_int(stmt, 10, stat.percentage_correct);
+
+    const int rc = sqlite3_step(stmt);
+    if (rc != SQLITE_DONE) {
+        const std::string message = sqlite3_errmsg(db_);
+        sqlite3_finalize(stmt);
+        throw std::runtime_error("insert_stat_snapshot failed: " + message);
+    }
+    const bool inserted = sqlite3_changes(db_) > 0;
+    sqlite3_finalize(stmt);
+    return inserted;
+}
+
+std::optional<ReviewStat> Store::previous_snapshot(long long subject_id,
+                                                     const std::string& before_data_updated_at) {
+    static const char* sql =
+        "SELECT subject_id, data_updated_at, meaning_correct, meaning_incorrect, "
+        "reading_correct, reading_incorrect, meaning_current_streak, reading_current_streak, "
+        "percentage_correct FROM stat_snapshot "
+        "WHERE subject_id = ? AND data_updated_at < ? "
+        "ORDER BY data_updated_at DESC LIMIT 1;";
+
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+        throw std::runtime_error(std::string("prepare previous_snapshot failed: ") +
+                                  sqlite3_errmsg(db_));
+    }
+    sqlite3_bind_int64(stmt, 1, subject_id);
+    sqlite3_bind_text(stmt, 2, before_data_updated_at.c_str(), -1, SQLITE_TRANSIENT);
+
+    std::optional<ReviewStat> result;
+    const int rc = sqlite3_step(stmt);
+    if (rc == SQLITE_ROW) {
+        ReviewStat stat;
+        stat.subject_id = sqlite3_column_int64(stmt, 0);
+        const unsigned char* updated = sqlite3_column_text(stmt, 1);
+        stat.data_updated_at = updated != nullptr ? reinterpret_cast<const char*>(updated) : "";
+        stat.meaning_correct = sqlite3_column_int(stmt, 2);
+        stat.meaning_incorrect = sqlite3_column_int(stmt, 3);
+        stat.reading_correct = sqlite3_column_int(stmt, 4);
+        stat.reading_incorrect = sqlite3_column_int(stmt, 5);
+        stat.meaning_current_streak = sqlite3_column_int(stmt, 6);
+        stat.reading_current_streak = sqlite3_column_int(stmt, 7);
+        stat.percentage_correct = sqlite3_column_int(stmt, 8);
+        result = stat;
+    } else if (rc != SQLITE_DONE) {
+        const std::string message = sqlite3_errmsg(db_);
+        sqlite3_finalize(stmt);
+        throw std::runtime_error("previous_snapshot failed: " + message);
+    }
+    sqlite3_finalize(stmt);
+    return result;
+}
+
+void Store::insert_failure_event(const FailureEvent& event) {
+    static const char* sql =
+        "INSERT INTO failure_event (subject_id, occurred_at, kind, session_id, cold_start) "
+        "VALUES (?, ?, ?, NULL, ?);";
+
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+        throw std::runtime_error(std::string("prepare insert_failure_event failed: ") +
+                                  sqlite3_errmsg(db_));
+    }
+
+    const std::string kind_text = failure_kind_to_text(event.kind);
+    sqlite3_bind_int64(stmt, 1, event.subject_id);
+    sqlite3_bind_text(stmt, 2, event.occurred_at.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 3, kind_text.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int(stmt, 4, event.cold_start ? 1 : 0);
+
+    const int rc = sqlite3_step(stmt);
+    if (rc != SQLITE_DONE) {
+        const std::string message = sqlite3_errmsg(db_);
+        sqlite3_finalize(stmt);
+        throw std::runtime_error("insert_failure_event failed: " + message);
+    }
+    sqlite3_finalize(stmt);
+}
+
+void Store::upsert_assignment(const Assignment& assignment) {
+    static const char* sql =
+        "INSERT OR REPLACE INTO assignment "
+        "(id, subject_id, subject_type, srs_stage, available_at, passed_at, data_updated_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?);";
+
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+        throw std::runtime_error(std::string("prepare upsert_assignment failed: ") +
+                                  sqlite3_errmsg(db_));
+    }
+
+    sqlite3_bind_int64(stmt, 1, assignment.id);
+    sqlite3_bind_int64(stmt, 2, assignment.subject_id);
+    sqlite3_bind_text(stmt, 3, assignment.subject_type.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int(stmt, 4, assignment.srs_stage);
+    sqlite3_bind_text(stmt, 5, assignment.available_at.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 6, assignment.passed_at.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 7, assignment.data_updated_at.c_str(), -1, SQLITE_TRANSIENT);
+
+    const int rc = sqlite3_step(stmt);
+    if (rc != SQLITE_DONE) {
+        const std::string message = sqlite3_errmsg(db_);
+        sqlite3_finalize(stmt);
+        throw std::runtime_error("upsert_assignment failed: " + message);
+    }
+    sqlite3_finalize(stmt);
+}
+
+void Store::upsert_study_material(const wk_api::StudyMaterial& material) {
+    static const char* sql =
+        "INSERT OR REPLACE INTO study_material "
+        "(id, subject_id, subject_type, meaning_note, reading_note, meaning_synonyms_json, "
+        "data_updated_at) "
+        "VALUES ((SELECT id FROM study_material WHERE subject_id = ?), ?, ?, ?, ?, ?, ?);";
+
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+        throw std::runtime_error(std::string("prepare upsert_study_material failed: ") +
+                                  sqlite3_errmsg(db_));
+    }
+
+    const std::string synonyms_text = json(material.meaning_synonyms).dump();
+    sqlite3_bind_int64(stmt, 1, material.subject_id);
+    sqlite3_bind_int64(stmt, 2, material.subject_id);
+    sqlite3_bind_text(stmt, 3, material.subject_type.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 4, material.meaning_note.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 5, material.reading_note.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 6, synonyms_text.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 7, material.data_updated_at.c_str(), -1, SQLITE_TRANSIENT);
+
+    const int rc = sqlite3_step(stmt);
+    if (rc != SQLITE_DONE) {
+        const std::string message = sqlite3_errmsg(db_);
+        sqlite3_finalize(stmt);
+        throw std::runtime_error("upsert_study_material failed: " + message);
+    }
+    sqlite3_finalize(stmt);
+}
+
+std::vector<FailureEvent> Store::failure_events_without_session() {
+    static const char* sql =
+        "SELECT id, subject_id, occurred_at, kind, cold_start FROM failure_event "
+        "WHERE session_id IS NULL ORDER BY occurred_at ASC;";
+
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+        throw std::runtime_error(std::string("prepare failure_events_without_session failed: ") +
+                                  sqlite3_errmsg(db_));
+    }
+
+    std::vector<FailureEvent> events;
+    int rc;
+    while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+        FailureEvent event;
+        event.id = sqlite3_column_int64(stmt, 0);
+        event.subject_id = sqlite3_column_int64(stmt, 1);
+        const unsigned char* occurred = sqlite3_column_text(stmt, 2);
+        event.occurred_at = occurred != nullptr ? reinterpret_cast<const char*>(occurred) : "";
+        const unsigned char* kind = sqlite3_column_text(stmt, 3);
+        event.kind = failure_kind_from_text(kind != nullptr ? reinterpret_cast<const char*>(kind) : "");
+        event.cold_start = sqlite3_column_int(stmt, 4) != 0;
+        event.session_id = -1;
+        events.push_back(event);
+    }
+    if (rc != SQLITE_DONE) {
+        const std::string message = sqlite3_errmsg(db_);
+        sqlite3_finalize(stmt);
+        throw std::runtime_error("failure_events_without_session failed: " + message);
+    }
+    sqlite3_finalize(stmt);
+    return events;
+}
+
+long long Store::insert_session(const Session& session) {
+    static const char* sql = "INSERT INTO session (started_at, ended_at) VALUES (?, ?);";
+
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+        throw std::runtime_error(std::string("prepare insert_session failed: ") + sqlite3_errmsg(db_));
+    }
+    sqlite3_bind_text(stmt, 1, session.started_at.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 2, session.ended_at.c_str(), -1, SQLITE_TRANSIENT);
+
+    const int rc = sqlite3_step(stmt);
+    if (rc != SQLITE_DONE) {
+        const std::string message = sqlite3_errmsg(db_);
+        sqlite3_finalize(stmt);
+        throw std::runtime_error("insert_session failed: " + message);
+    }
+    const long long new_id = sqlite3_last_insert_rowid(db_);
+    sqlite3_finalize(stmt);
+    return new_id;
+}
+
+void Store::assign_failure_event_session(long long failure_event_id, long long session_id) {
+    static const char* sql = "UPDATE failure_event SET session_id = ? WHERE id = ?;";
+
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+        throw std::runtime_error(std::string("prepare assign_failure_event_session failed: ") +
+                                  sqlite3_errmsg(db_));
+    }
+    sqlite3_bind_int64(stmt, 1, session_id);
+    sqlite3_bind_int64(stmt, 2, failure_event_id);
+
+    const int rc = sqlite3_step(stmt);
+    if (rc != SQLITE_DONE) {
+        const std::string message = sqlite3_errmsg(db_);
+        sqlite3_finalize(stmt);
+        throw std::runtime_error("assign_failure_event_session failed: " + message);
+    }
+    sqlite3_finalize(stmt);
 }

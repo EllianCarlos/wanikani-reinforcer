@@ -34,6 +34,7 @@ find_package(Catch2 3 REQUIRED)
 add_executable(wkr_tests
     tests/test_model.cpp
     tests/test_store.cpp
+    tests/test_failure_detection.cpp
 )
 target_link_libraries(wkr_tests PRIVATE wkr_lib Catch2::Catch2WithMain)
 
