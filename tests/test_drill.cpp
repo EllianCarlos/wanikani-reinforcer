@@ -469,3 +469,37 @@ TEST_CASE("run_drill stops early on EOF mid-drill and prints a partial score", "
     // aborted second question must not have written a partial/garbage row.
     CHECK(read_drill_results(db_path).size() == 1);
 }
+
+TEST_CASE("run_drill prints why each question was picked: edge kind, likely vs co-failure, and score",
+          "[drill]") {
+    const std::string db_path = temp_db_path("reason_line");
+    std::filesystem::remove(db_path);
+    Store store(db_path);
+
+    const std::vector<Subject> subjects = make_fixture_subjects();
+
+    ConfusionPair co_failure = make_pair(2, 1);
+    co_failure.dominant_kind = EdgeKind::Reading;
+    co_failure.score = 4.2;
+    co_failure.likely = false;
+
+    ConfusionPair likely_guess = make_pair(1, 2);
+    likely_guess.dominant_kind = EdgeKind::WkVisual;
+    likely_guess.score = 0.4;
+    likely_guess.likely = true;
+
+    // Q1 forced-choice on co_failure, Q2 production on likely_guess (see
+    // drill.h's alternation rule) -- the reason line must appear
+    // regardless of whether the answer was right or wrong.
+    std::istringstream in("1\nnope\n");
+    std::ostringstream out;
+    run_drill({co_failure, likely_guess}, subjects, /*study_materials=*/{}, store, /*question_count=*/2, in,
+              out);
+
+    const std::string output = out.str();
+    CAPTURE(output);
+    CHECK(output.find("Drilled because: these share a reading, you missed these together -- score 4.20") !=
+          std::string::npos);
+    CHECK(output.find("Drilled because: WaniKani flags these as visually similar, a likely guess (not yet "
+                       "observed together) -- score 0.40") != std::string::npos);
+}

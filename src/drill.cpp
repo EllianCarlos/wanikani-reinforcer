@@ -5,6 +5,7 @@
 #include <ctime>
 #include <array>
 #include <cstdio>
+#include <iomanip>
 #include <map>
 #include <set>
 #include <sstream>
@@ -39,6 +40,38 @@ std::string colorize(const std::string& text, const char* code, bool use_color) 
         return text;
     }
     return std::string(code) + text + kColorReset;
+}
+
+// Human-readable EdgeKind label for the "why was this drilled" line.
+// Deliberately separate from store.cpp's edge_kind_to_text (a DB
+// serialization format, not prose) -- this is user-facing copy and is
+// free to diverge from that column's exact wording.
+std::string edge_kind_label(EdgeKind kind) {
+    switch (kind) {
+        case EdgeKind::WkVisual:
+            return "WaniKani flags these as visually similar";
+        case EdgeKind::Component:
+            return "these share a component";
+        case EdgeKind::Reading:
+            return "these share a reading";
+        case EdgeKind::Meaning:
+            return "these share a meaning";
+        case EdgeKind::CharShape:
+            return "these have a similar character shape";
+    }
+    return "these are linked in the similarity graph";  // unreachable; keeps -Wall happy
+}
+
+// One line explaining why `pair` was picked for this drill question,
+// printed once per question regardless of whether the answer was right
+// or wrong. `pair.likely` (see model.h's ConfusionPair) tells an observed
+// co-failure apart from a single-sided similarity-graph guess.
+std::string drill_reason_line(const ConfusionPair& pair) {
+    std::ostringstream out;
+    out << "Drilled because: " << edge_kind_label(pair.dominant_kind) << ", "
+        << (pair.likely ? "a likely guess (not yet observed together)" : "you missed these together")
+        << " -- score " << std::fixed << std::setprecision(2) << pair.score;
+    return out.str();
 }
 
 // Radicals can be image-only (empty `characters`); fall back to the slug
@@ -376,6 +409,7 @@ bool run_forced_choice_question(const ConfusionPair& pair, bool ask_reading, int
                                   study_material, all_subjects)
             << "\n";
     }
+    out << drill_reason_line(pair) << "\n";
 
     store.insert_drill_result({correct_subject.id, confusable_subject.id, is_correct, now_iso8601()});
     return is_correct;
@@ -447,6 +481,7 @@ bool run_production_question(const ConfusionPair& pair,
                                   study_material, all_subjects)
             << "\n";
     }
+    out << drill_reason_line(pair) << "\n";
 
     store.insert_drill_result({quizzed_subject.id, confusable_subject.id, is_correct, now_iso8601()});
     return is_correct;
