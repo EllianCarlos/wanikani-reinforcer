@@ -17,6 +17,7 @@ add_library(wkr_lib STATIC
     src/http.cpp
     src/wk_api.cpp
     src/store.cpp
+    src/similarity.cpp
 )
 target_include_directories(wkr_lib PUBLIC src)
 target_link_libraries(wkr_lib PUBLIC
@@ -35,6 +36,7 @@ add_executable(wkr_tests
     tests/test_model.cpp
     tests/test_store.cpp
     tests/test_failure_detection.cpp
+    tests/test_similarity.cpp
 )
 target_link_libraries(wkr_tests PRIVATE wkr_lib Catch2::Catch2WithMain)
 

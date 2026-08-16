@@ -133,6 +133,95 @@ json readings_to_json(const std::vector<Reading>& readings) {
     return arr;
 }
 
+// The reverse of *_to_json above, used by Store::all_subjects to
+// reconstruct Subject from the JSON columns. Each treats an empty
+// column as "no rows" rather than a parse error, since a freshly-created
+// column could in principle be empty text.
+
+std::vector<Meaning> meanings_from_json(const std::string& text) {
+    std::vector<Meaning> result;
+    if (text.empty()) {
+        return result;
+    }
+    for (const auto& item : json::parse(text)) {
+        Meaning m;
+        m.meaning = item.value("meaning", "");
+        m.primary = item.value("primary", false);
+        m.accepted_answer = item.value("accepted_answer", false);
+        result.push_back(std::move(m));
+    }
+    return result;
+}
+
+std::vector<AuxiliaryMeaning> aux_meanings_from_json(const std::string& text) {
+    std::vector<AuxiliaryMeaning> result;
+    if (text.empty()) {
+        return result;
+    }
+    for (const auto& item : json::parse(text)) {
+        AuxiliaryMeaning m;
+        m.meaning = item.value("meaning", "");
+        m.type = item.value("type", "");
+        result.push_back(std::move(m));
+    }
+    return result;
+}
+
+std::vector<Reading> readings_from_json(const std::string& text) {
+    std::vector<Reading> result;
+    if (text.empty()) {
+        return result;
+    }
+    for (const auto& item : json::parse(text)) {
+        Reading r;
+        r.reading = item.value("reading", "");
+        r.primary = item.value("primary", false);
+        r.accepted_answer = item.value("accepted_answer", false);
+        result.push_back(std::move(r));
+    }
+    return result;
+}
+
+std::vector<long long> ids_from_json(const std::string& text) {
+    if (text.empty()) {
+        return {};
+    }
+    return json::parse(text).get<std::vector<long long>>();
+}
+
+// EdgeKind <-> the similarity_edge.kind TEXT column.
+std::string edge_kind_to_text(EdgeKind kind) {
+    switch (kind) {
+        case EdgeKind::WkVisual:
+            return "wk_visual";
+        case EdgeKind::Component:
+            return "component";
+        case EdgeKind::Reading:
+            return "reading";
+        case EdgeKind::Meaning:
+            return "meaning";
+        case EdgeKind::CharShape:
+            return "char_shape";
+    }
+    return "wk_visual";  // unreachable; keeps -Wall happy about return paths
+}
+
+EdgeKind edge_kind_from_text(const std::string& text) {
+    if (text == "component") {
+        return EdgeKind::Component;
+    }
+    if (text == "reading") {
+        return EdgeKind::Reading;
+    }
+    if (text == "meaning") {
+        return EdgeKind::Meaning;
+    }
+    if (text == "char_shape") {
+        return EdgeKind::CharShape;
+    }
+    return EdgeKind::WkVisual;
+}
+
 }  // namespace
 
 Store::Store(const std::string& db_path) {
@@ -492,4 +581,116 @@ void Store::assign_failure_event_session(long long failure_event_id, long long s
         throw std::runtime_error("assign_failure_event_session failed: " + message);
     }
     sqlite3_finalize(stmt);
+}
+
+std::vector<Subject> Store::all_subjects() {
+    static const char* sql =
+        "SELECT id, type, characters, slug, level, meanings_json, aux_meanings_json, "
+        "readings_json, component_ids_json, visually_similar_ids_json, meaning_mnemonic, "
+        "reading_mnemonic, data_updated_at FROM subject;";
+
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+        throw std::runtime_error(std::string("prepare all_subjects failed: ") + sqlite3_errmsg(db_));
+    }
+
+    auto text_col = [&](int idx) -> std::string {
+        const unsigned char* t = sqlite3_column_text(stmt, idx);
+        return t != nullptr ? std::string(reinterpret_cast<const char*>(t)) : std::string();
+    };
+
+    std::vector<Subject> subjects;
+    int rc;
+    while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+        Subject s;
+        s.id = sqlite3_column_int64(stmt, 0);
+        s.type = text_col(1);
+        s.characters = text_col(2);
+        s.slug = text_col(3);
+        s.level = sqlite3_column_int(stmt, 4);
+        s.meanings = meanings_from_json(text_col(5));
+        s.auxiliary_meanings = aux_meanings_from_json(text_col(6));
+        s.readings = readings_from_json(text_col(7));
+        s.component_subject_ids = ids_from_json(text_col(8));
+        s.visually_similar_subject_ids = ids_from_json(text_col(9));
+        s.meaning_mnemonic = text_col(10);
+        s.reading_mnemonic = text_col(11);
+        s.data_updated_at = text_col(12);
+        subjects.push_back(std::move(s));
+    }
+    if (rc != SQLITE_DONE) {
+        const std::string message = sqlite3_errmsg(db_);
+        sqlite3_finalize(stmt);
+        throw std::runtime_error("all_subjects failed: " + message);
+    }
+    sqlite3_finalize(stmt);
+    return subjects;
+}
+
+void Store::replace_similarity_edges(const std::vector<SimilarityEdge>& edges) {
+    exec(db_, "BEGIN;");
+    try {
+        exec(db_, "DELETE FROM similarity_edge;");
+
+        static const char* sql =
+            "INSERT INTO similarity_edge (a_id, b_id, kind, weight) VALUES (?, ?, ?, ?);";
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+            throw std::runtime_error(std::string("prepare replace_similarity_edges failed: ") +
+                                      sqlite3_errmsg(db_));
+        }
+
+        for (const auto& edge : edges) {
+            const std::string kind_text = edge_kind_to_text(edge.kind);
+            sqlite3_bind_int64(stmt, 1, edge.a_id);
+            sqlite3_bind_int64(stmt, 2, edge.b_id);
+            sqlite3_bind_text(stmt, 3, kind_text.c_str(), -1, SQLITE_TRANSIENT);
+            sqlite3_bind_double(stmt, 4, edge.weight);
+
+            const int rc = sqlite3_step(stmt);
+            if (rc != SQLITE_DONE) {
+                const std::string message = sqlite3_errmsg(db_);
+                sqlite3_finalize(stmt);
+                throw std::runtime_error("replace_similarity_edges insert failed: " + message);
+            }
+            sqlite3_reset(stmt);
+        }
+        sqlite3_finalize(stmt);
+    } catch (...) {
+        exec(db_, "ROLLBACK;");
+        throw;
+    }
+    exec(db_, "COMMIT;");
+}
+
+std::vector<SimilarityEdge> Store::edges_for(long long subject_id) {
+    static const char* sql =
+        "SELECT a_id, b_id, kind, weight FROM similarity_edge WHERE a_id = ? OR b_id = ?;";
+
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+        throw std::runtime_error(std::string("prepare edges_for failed: ") + sqlite3_errmsg(db_));
+    }
+    sqlite3_bind_int64(stmt, 1, subject_id);
+    sqlite3_bind_int64(stmt, 2, subject_id);
+
+    std::vector<SimilarityEdge> edges;
+    int rc;
+    while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+        SimilarityEdge edge;
+        edge.a_id = sqlite3_column_int64(stmt, 0);
+        edge.b_id = sqlite3_column_int64(stmt, 1);
+        const unsigned char* kind_text = sqlite3_column_text(stmt, 2);
+        edge.kind =
+            edge_kind_from_text(kind_text != nullptr ? reinterpret_cast<const char*>(kind_text) : "");
+        edge.weight = sqlite3_column_double(stmt, 3);
+        edges.push_back(edge);
+    }
+    if (rc != SQLITE_DONE) {
+        const std::string message = sqlite3_errmsg(db_);
+        sqlite3_finalize(stmt);
+        throw std::runtime_error("edges_for failed: " + message);
+    }
+    sqlite3_finalize(stmt);
+    return edges;
 }
