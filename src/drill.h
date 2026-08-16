@@ -58,6 +58,14 @@ bool matches_answer(const std::string& input, const Subject& subject,
 // Handles EOF on `in` (e.g. piped input running out mid-drill) by
 // stopping the drill early and printing whatever partial score has
 // accumulated, rather than crashing or looping forever.
+//
+// `use_color`, when true, wraps "Correct!"/"Incorrect." feedback in raw
+// ANSI escape codes (green/red); the rest of each feedback line is
+// unchanged either way, so substring checks against it still work.
+// Defaults to false so every existing call site (in particular, unit
+// tests asserting on exact output) keeps behaving exactly as before
+// without needing to pass anything; main.cpp is the only caller expected
+// to pass true, gated on an isatty() check of the real terminal.
 void run_drill(const std::vector<ConfusionPair>& pairs, const std::vector<Subject>& all_subjects,
                 const std::vector<wk_api::StudyMaterial>& study_materials, Store& store,
-                int question_count, std::istream& in, std::ostream& out);
+                int question_count, std::istream& in, std::ostream& out, bool use_color = false);

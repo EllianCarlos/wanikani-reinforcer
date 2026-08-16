@@ -1,3 +1,5 @@
+#include <unistd.h>
+
 #include <array>
 #include <cstdio>
 #include <ctime>
@@ -160,6 +162,12 @@ std::string now_iso8601() {
     return std::string(buf.data());
 }
 
+// True when stdout is an interactive terminal (not piped/redirected) --
+// the gate for emitting ANSI colour codes, so piping `wkr report`/`wkr
+// drill` output to a file or another program never fills it with raw
+// escape codes.
+bool stdout_is_tty() { return isatty(fileno(stdout)) != 0; }
+
 int run_report() {
     try {
         Config config = Config::load();
@@ -182,7 +190,8 @@ int run_report() {
         const std::vector<ConfusionPair> pairs =
             compute_confusion_pairs(sessions, events, edges, leeches, now_iso8601());
 
-        print_report(pairs, leeches, subjects, assignments, study_materials, latest_stats, std::cout);
+        print_report(pairs, leeches, subjects, assignments, study_materials, latest_stats, std::cout,
+                     stdout_is_tty());
         return 0;
     } catch (const std::exception& e) {
         std::cerr << "error: " << e.what() << std::endl;
@@ -221,7 +230,8 @@ int run_drill_command(int question_count) {
             return 0;
         }
 
-        run_drill(pairs, subjects, study_materials, store, question_count, std::cin, std::cout);
+        run_drill(pairs, subjects, study_materials, store, question_count, std::cin, std::cout,
+                  stdout_is_tty());
         return 0;
     } catch (const std::exception& e) {
         std::cerr << "error: " << e.what() << std::endl;

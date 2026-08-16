@@ -19,6 +19,28 @@
 
 namespace {
 
+// Raw ANSI escape codes -- no ncurses/terminal-capability library, per
+// the plan. Kept as file-local constants/helper (duplicated in
+// report.cpp) rather than shared via a new header, consistent with how
+// the rest of this codebase keeps small per-file helpers in anonymous
+// namespaces (see display_name's comment just below for the same
+// pattern).
+constexpr const char* kColorReset = "\033[0m";
+constexpr const char* kColorGreen = "\033[32m";
+constexpr const char* kColorRed = "\033[31m";
+
+// Wraps `text` in `code`...reset when use_color is true; returns `text`
+// unchanged otherwise (and always for an empty string). Because this only
+// ever wraps a whole segment rather than splicing into the middle of one,
+// a substring check against the plain text inside `text` still finds it
+// either way.
+std::string colorize(const std::string& text, const char* code, bool use_color) {
+    if (!use_color || text.empty()) {
+        return text;
+    }
+    return std::string(code) + text + kColorReset;
+}
+
 // Radicals can be image-only (empty `characters`); fall back to the slug
 // wherever a subject needs to be displayed. Mirrors the same small
 // helper duplicated in report.cpp/advice.cpp -- kept as a per-file
@@ -217,7 +239,8 @@ bool run_forced_choice_question(const ConfusionPair& pair, bool ask_reading, int
                                  const std::vector<Subject>& all_subjects,
                                  const std::map<long long, const Subject*>& subject_by_id,
                                  const std::map<long long, const wk_api::StudyMaterial*>& study_material_by_id,
-                                 Store& store, std::istream& in, std::ostream& out, bool& eof_hit) {
+                                 Store& store, std::istream& in, std::ostream& out, bool use_color,
+                                 bool& eof_hit) {
     const Subject& correct_subject = *subject_by_id.at(pair.a_id);
     const Subject& confusable_subject = *subject_by_id.at(pair.b_id);
 
@@ -269,14 +292,15 @@ bool run_forced_choice_question(const ConfusionPair& pair, bool ask_reading, int
     const bool is_correct = (chosen >= 0 && static_cast<size_t>(chosen) == correct_index);
 
     if (is_correct) {
-        out << "Correct!\n";
+        out << colorize("Correct!", kColorGreen, use_color) << "\n";
     } else {
         const FailureKind failure_kind = used_reading ? FailureKind::Reading : FailureKind::Meaning;
         std::optional<wk_api::StudyMaterial> study_material;
         if (const auto it = study_material_by_id.find(correct_subject.id); it != study_material_by_id.end()) {
             study_material = *it->second;
         }
-        out << "Incorrect. The correct answer was: " << display_name(correct_subject) << "\n";
+        out << colorize("Incorrect.", kColorRed, use_color) << " The correct answer was: "
+            << display_name(correct_subject) << "\n";
         out << first_advice_line(correct_subject, confusable_subject, pair.dominant_kind, failure_kind,
                                   study_material, all_subjects)
             << "\n";
@@ -294,7 +318,7 @@ bool run_production_question(const ConfusionPair& pair,
                               const std::map<long long, const Subject*>& subject_by_id,
                               const std::map<long long, const wk_api::StudyMaterial*>& study_material_by_id,
                               const std::vector<Subject>& all_subjects, Store& store, std::istream& in,
-                              std::ostream& out, bool& eof_hit) {
+                              std::ostream& out, bool use_color, bool& eof_hit) {
     const Subject& quizzed_subject = *subject_by_id.at(pair.a_id);
     const Subject& confusable_subject = *subject_by_id.at(pair.b_id);
 
@@ -314,11 +338,11 @@ bool run_production_question(const ConfusionPair& pair,
     const bool is_correct = matches_answer(line, quizzed_subject, study_material);
 
     if (is_correct) {
-        out << "Correct!\n";
+        out << colorize("Correct!", kColorGreen, use_color) << "\n";
     } else {
         const Meaning* m = primary_meaning(quizzed_subject);
-        out << "Incorrect. Accepted answer: " << (m != nullptr ? m->meaning : display_name(quizzed_subject))
-            << "\n";
+        out << colorize("Incorrect.", kColorRed, use_color) << " Accepted answer: "
+            << (m != nullptr ? m->meaning : display_name(quizzed_subject)) << "\n";
         out << first_advice_line(quizzed_subject, confusable_subject, pair.dominant_kind, FailureKind::Meaning,
                                   study_material, all_subjects)
             << "\n";
@@ -390,7 +414,7 @@ bool matches_answer(const std::string& input, const Subject& subject,
 
 void run_drill(const std::vector<ConfusionPair>& pairs, const std::vector<Subject>& all_subjects,
                 const std::vector<wk_api::StudyMaterial>& study_materials, Store& store,
-                int question_count, std::istream& in, std::ostream& out) {
+                int question_count, std::istream& in, std::ostream& out, bool use_color) {
     if (pairs.empty() || question_count <= 0) {
         out << "Nothing to drill yet -- run 'wkr report' first to build up confusion pairs.\n";
         return;
@@ -427,10 +451,10 @@ void run_drill(const std::vector<ConfusionPair>& pairs, const std::vector<Subjec
             ++forced_choice_seen;
             is_correct = run_forced_choice_question(pair, ask_reading, static_cast<int>(i), all_subjects,
                                                       subject_by_id, study_material_by_id, store, in, out,
-                                                      eof_hit);
+                                                      use_color, eof_hit);
         } else {
             is_correct = run_production_question(pair, subject_by_id, study_material_by_id, all_subjects,
-                                                   store, in, out, eof_hit);
+                                                   store, in, out, use_color, eof_hit);
         }
 
         if (eof_hit) {
