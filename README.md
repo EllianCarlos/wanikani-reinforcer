@@ -80,8 +80,9 @@ wkr drill [--count N]                # run an interactive local quiz over your t
   controls how large a gap between two failures must be before they're
   treated as separate study sessions; it defaults to 45.
 - `wkr report` and `wkr drill` are both purely local — they only read from
-  the SQLite database `wkr sync` populated. `--count` controls how many
-  questions `wkr drill` asks; it defaults to 5.
+  the SQLite database `wkr sync` populated, and they don't need an API
+  token configured at all (only `wkr sync` does). `--count` controls how
+  many questions `wkr drill` asks; it defaults to 5.
 - Output is colourized (bold/red for leeches, cyan for focus advice, green
   for correct drill answers, red for incorrect ones) when stdout is an
   interactive terminal, and plain text otherwise (e.g. when piped to a file

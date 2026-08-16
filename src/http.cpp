@@ -23,8 +23,12 @@ void ensure_curl_initialized() {
     (void)initialized;
 }
 
+// The one place a missing token becomes a hard failure: every HTTP
+// request needs one, so require_token() throws here if none is
+// configured. Purely-local commands (`report`, `drill`) never reach this
+// function and so never need a token.
 const std::string& cached_token() {
-    static const std::string token = Config::load().api_token;
+    static const std::string token = Config::load().require_token();
     return token;
 }
 

@@ -23,6 +23,19 @@ public:
     Store(Store&&) = delete;
     Store& operator=(Store&&) = delete;
 
+    // Explicit transaction control, for callers that write thousands of
+    // rows in a loop (the sync path's subject upserts and stat-snapshot
+    // processing). Without a wrapping transaction every single INSERT is
+    // its own implicit transaction and pays a WAL commit each time —
+    // ~27k of them on a first sync. Use the same shape
+    // replace_similarity_edges uses internally: begin, do the work in a
+    // try block, rollback and rethrow on exception, commit on success.
+    // Transactions must not be nested (SQLite has no nested BEGIN), so
+    // do not wrap a call to replace_similarity_edges in one.
+    void begin_transaction();
+    void commit_transaction();
+    void rollback_transaction();
+
     // Inserts or replaces the subject row for subject.id. Subjects rarely
     // change, so replace-on-conflict is correct (unlike stat_snapshot,
     // which must never overwrite history).

@@ -216,6 +216,144 @@ TEST_CASE("run_drill scripted end-to-end: correct/incorrect feedback, score line
     CHECK(rows[3] == std::make_tuple(2LL, 1LL, true));   // Q4: dog correct
 }
 
+// --- forced-choice grading of legitimately-shared answers -------------
+
+namespace {
+
+// Fixture for the "unanswerable by construction" case: 校 (id 11) and 高
+// (id 12) share こう as their PRIMARY reading -- exactly the pair
+// similarity.cpp gives a Reading edge weight 0.8, the highest reading
+// weight there is, so pairs like this sort to the top of the confusion
+// list and are the ones the drill reaches most often. 大 (id 13) is the
+// same-level third option and is NOT read こう.
+std::vector<Subject> make_shared_reading_subjects() {
+    Subject school;
+    school.id = 11;
+    school.characters = "校";
+    school.slug = "school";
+    school.level = 1;
+    school.meanings = {Meaning{"School", true, true}};
+    school.readings = {Reading{"こう", true, true}};
+
+    Subject tall;
+    tall.id = 12;
+    tall.characters = "高";
+    tall.slug = "tall";
+    tall.level = 1;
+    tall.meanings = {Meaning{"Tall", true, true}};
+    tall.readings = {Reading{"こう", true, true}};
+
+    Subject big;
+    big.id = 13;
+    big.characters = "大";
+    big.slug = "big";
+    big.level = 1;
+    big.meanings = {Meaning{"Big", true, true}};
+    big.readings = {Reading{"だい", true, true}};
+
+    return {school, tall, big};
+}
+
+}  // namespace
+
+TEST_CASE("forced-choice reading question accepts a distractor that genuinely shares the shown reading",
+          "[drill][regression]") {
+    // Question order (see drill.h): Q1 forced-choice/meaning, Q2
+    // production, Q3 forced-choice/reading. Q3 shows 校's primary reading
+    // こう with options rotated by 2 -> [大, 校, 高], so 高 is choice 3.
+    // 高 IS read こう, so choosing it must be graded correct even though
+    // 校 is the option the question designated "correct".
+    const std::vector<Subject> subjects = make_shared_reading_subjects();
+    const std::vector<ConfusionPair> pairs = {make_pair(11, 12), make_pair(11, 12), make_pair(11, 12)};
+
+    SECTION("choosing the reading-sharing distractor is correct") {
+        const std::string db_path = temp_db_path("shared_reading_ok");
+        std::filesystem::remove(db_path);
+        Store store(db_path);
+
+        std::istringstream in("1\nSchool\n3\n");
+        std::ostringstream out;
+        run_drill(pairs, subjects, /*study_materials=*/{}, store, /*question_count=*/3, in, out);
+
+        const std::string output = out.str();
+        CAPTURE(output);
+        CHECK(output.find("Which one is read \"こう\"?") != std::string::npos);
+        CHECK(output.find("3/3 correct") != std::string::npos);
+
+        const auto rows = read_drill_results(db_path);
+        REQUIRE(rows.size() == 3);
+        CHECK(std::get<2>(rows[2]) == true);  // Q3 recorded as correct
+    }
+
+    SECTION("choosing an option that is NOT read that way is still wrong") {
+        const std::string db_path = temp_db_path("shared_reading_wrong");
+        std::filesystem::remove(db_path);
+        Store store(db_path);
+
+        // Q3 choice 1 is 大 (read だい, not こう) -- the permissiveness
+        // added for genuinely-shared readings must not grade everything
+        // correct.
+        std::istringstream in("1\nSchool\n1\n");
+        std::ostringstream out;
+        run_drill(pairs, subjects, /*study_materials=*/{}, store, /*question_count=*/3, in, out);
+
+        const std::string output = out.str();
+        CAPTURE(output);
+        CHECK(output.find("2/3 correct") != std::string::npos);
+
+        const auto rows = read_drill_results(db_path);
+        REQUIRE(rows.size() == 3);
+        CHECK(std::get<2>(rows[2]) == false);
+    }
+}
+
+TEST_CASE("forced-choice meaning question accepts a distractor that also accepts the shown meaning",
+          "[drill][regression]") {
+    // The meaning-axis counterpart: 太 lists "Big" as a non-primary but
+    // accepted meaning, so when the question shows 大's primary meaning
+    // "Big", picking 太 is a legitimate answer.
+    Subject big;
+    big.id = 21;
+    big.characters = "大";
+    big.slug = "big";
+    big.level = 1;
+    big.meanings = {Meaning{"Big", true, true}};
+
+    Subject fat;
+    fat.id = 22;
+    fat.characters = "太";
+    fat.slug = "fat";
+    fat.level = 1;
+    fat.meanings = {Meaning{"Fat", true, true}, Meaning{"Big", false, true}};
+
+    Subject dog;
+    dog.id = 23;
+    dog.characters = "犬";
+    dog.slug = "dog";
+    dog.level = 1;
+    dog.meanings = {Meaning{"Dog", true, true}};
+
+    const std::string db_path = temp_db_path("shared_meaning");
+    std::filesystem::remove(db_path);
+    Store store(db_path);
+
+    // Q1 is forced-choice/meaning with no rotation: options [大, 太, 犬],
+    // so 太 is choice 2.
+    std::istringstream in("2\n");
+    std::ostringstream out;
+    run_drill({make_pair(21, 22)}, {big, fat, dog}, /*study_materials=*/{}, store, /*question_count=*/1, in,
+              out);
+
+    const std::string output = out.str();
+    CAPTURE(output);
+    CHECK(output.find("Which one means \"Big\"?") != std::string::npos);
+    CHECK(output.find("1/1 correct") != std::string::npos);
+
+    const auto rows = read_drill_results(db_path);
+    REQUIRE(rows.size() == 1);
+    CHECK(std::get<2>(rows[0]) == true);
+}
+
 TEST_CASE("run_drill stops early on EOF mid-drill and prints a partial score", "[drill]") {
     const std::string db_path = temp_db_path("eof");
     std::filesystem::remove(db_path);

@@ -17,6 +17,7 @@ add_library(wkr_lib STATIC
     src/http.cpp
     src/wk_api.cpp
     src/store.cpp
+    src/sync.cpp
     src/similarity.cpp
     src/confusion.cpp
     src/width.cpp
@@ -39,6 +40,7 @@ find_package(Catch2 3 REQUIRED)
 
 add_executable(wkr_tests
     tests/test_model.cpp
+    tests/test_config.cpp
     tests/test_store.cpp
     tests/test_failure_detection.cpp
     tests/test_similarity.cpp

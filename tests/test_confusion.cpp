@@ -57,6 +57,26 @@ TEST_CASE("compute_leech_scores picks the larger of meaning/reading and sets is_
     CHECK(leeches[1].leech_score == Approx(8.0));
 }
 
+TEST_CASE("compute_leech_scores excludes never-failed subjects even when they clear the review minimum",
+          "[confusion][regression]") {
+    // 10 reviews, all correct on both axes -> both axis scores are 0.0.
+    // Without the positive-score gate this subject would still be
+    // reported as a leech (print_report prints the top N
+    // unconditionally), claiming the user fails its meaning -- which
+    // never happened.
+    const ReviewStat never_failed = make_stat(7, /*mc=*/5, /*mi=*/0, /*ms=*/5, /*rc=*/5, /*ri=*/0, /*rs=*/5);
+    // Regression guard on the other side: one real incorrect answer must
+    // still produce a leech entry.
+    const ReviewStat failed_once = make_stat(8, /*mc=*/5, /*mi=*/1, /*ms=*/2, /*rc=*/5, /*ri=*/0, /*rs=*/5);
+
+    const std::vector<LeechEntry> leeches = compute_leech_scores({never_failed, failed_once});
+
+    REQUIRE(leeches.size() == 1);
+    CHECK(leeches[0].subject_id == 8);
+    CHECK(leeches[0].leech_score > 0.0);
+    CHECK(leeches[0].is_meaning == true);
+}
+
 TEST_CASE("compute_leech_scores excludes subjects below the minimum review count", "[confusion]") {
     const ReviewStat below = make_stat(9, 1, 1, 0, 1, 1, 0);  // total = 4
     const std::vector<LeechEntry> leeches = compute_leech_scores({below});

@@ -15,6 +15,7 @@ inline constexpr const char* kBaseUrl = "https://api.wanikani.com/v2";
 struct HttpResponse {
     long status = 0;
     std::string body;
+    // NOT CURRENTLY WIRED UP — see the note on `if_none_match` below.
     std::string etag;
 };
 
@@ -29,6 +30,18 @@ struct HttpResponse {
 // for conditional requests; expect a 304 response when the resource is
 // unchanged. The response ETag header is always captured into
 // HttpResponse::etag, on 200 or 304.
+//
+// IMPORTANT — the ETag/304 plumbing above is NOT wired up by any caller.
+// Nothing in wk_api.cpp passes `if_none_match` or persists
+// HttpResponse::etag to `sync_meta`; the `updated_after` cursor is the
+// sole sync freshness mechanism actually in use. This is deliberate
+// (ETag support is a bandwidth nicety, not a correctness requirement),
+// and it is a trap for a future implementer: wk_api.cpp's pagination
+// loops currently treat every non-200 status as a hard error
+// (`if (response.status != 200) throw`), so a 304 would abort the sync.
+// Anyone wiring ETags in must FIRST make those loops handle 304 as "no
+// new data" (stop paginating, return what's already accumulated, leave
+// the stored cursor/ETag as-is) rather than as a failure.
 //
 // Rate limiting: after any response, if `RateLimit-Remaining` reached 0,
 // sleeps until `RateLimit-Reset` (a Unix timestamp) before returning, so

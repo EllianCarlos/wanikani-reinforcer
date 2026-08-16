@@ -57,6 +57,15 @@ std::vector<LeechEntry> compute_leech_scores(const std::vector<ReviewStat>& late
             entry.leech_score = reading_score;
             entry.is_meaning = false;
         }
+        // A subject can clear the minimum-review bar with zero incorrect
+        // answers on both axes, which scores 0.0 on both — it has never
+        // been failed, so it is not a leech at all. Without this gate it
+        // would still be reported (print_report prints the top N
+        // unconditionally) as e.g. "You fail the MEANING, not the
+        // reading" for something the user has never once got wrong.
+        if (entry.leech_score <= 0.0) {
+            continue;
+        }
         result.push_back(entry);
     }
 

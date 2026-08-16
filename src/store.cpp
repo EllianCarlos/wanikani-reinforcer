@@ -627,6 +627,12 @@ std::vector<Subject> Store::all_subjects() {
     return subjects;
 }
 
+void Store::begin_transaction() { exec(db_, "BEGIN;"); }
+
+void Store::commit_transaction() { exec(db_, "COMMIT;"); }
+
+void Store::rollback_transaction() { exec(db_, "ROLLBACK;"); }
+
 void Store::replace_similarity_edges(const std::vector<SimilarityEdge>& edges) {
     exec(db_, "BEGIN;");
     try {

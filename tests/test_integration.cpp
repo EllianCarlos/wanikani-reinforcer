@@ -13,15 +13,22 @@
 #include "report.h"
 #include "similarity.h"
 #include "store.h"
+#include "sync.h"
 #include "wk_api.h"
 
 // End-to-end coverage that the modules built across Tasks 1-5 actually
 // compose: sync -> report -> drill against one seeded Store, with no
 // wk_api::fetch_* or http:: call anywhere in this file (grep confirms).
-// Fixture vectors stand in for what a real `wkr sync` would have fetched
-// over HTTP; everything downstream of "subjects and stats already
-// arrived" needs no network at all, which is exactly the seam this file
-// exercises.
+//
+// The sync step drives the REAL pipeline -- ::run_sync() from src/sync.cpp,
+// the same function `wkr sync` calls -- with fixture fetchers injected in
+// place of the HTTP ones (SyncFetchers; see sync.h). This file used to
+// hand-reimplement run_sync's ordering, which meant it verified a copy of
+// the pipeline rather than the pipeline itself; a bug in the real
+// ordering could not be caught here. Fixture vectors stand in for what a
+// real `wkr sync` would have fetched over HTTP; everything downstream of
+// "subjects and stats already arrived" needs no network at all, which is
+// exactly the seam this file exercises.
 
 namespace {
 
@@ -123,47 +130,27 @@ std::vector<ReviewStat> fixture_stats() {
     return {fat_stat, dog_stat};
 }
 
-// Mirrors the local (non-HTTP) portion of main.cpp's run_sync: upserts
-// subjects, inserts stat_snapshot rows (idempotent via Store's INSERT OR
-// IGNORE on its (subject_id, data_updated_at) primary key), classifies +
-// persists failure events for newly-inserted snapshots only, groups
-// ungrouped failure events into sessions, and rebuilds the similarity
-// graph (also idempotent -- replace_similarity_edges is a full replace,
-// not an append). Deliberately never calls wk_api::fetch_* or http::get
-// -- see the file header comment.
-void fixture_sync(Store& store, const std::vector<Subject>& subjects, const std::vector<ReviewStat>& stats,
-                   int session_gap_minutes = 45) {
-    for (const auto& subject : subjects) {
-        store.upsert_subject(subject);
-    }
+// The fixture stand-in for the four HTTP fetches run_sync performs. Each
+// closure ignores the `updated_after` cursor it is handed and returns the
+// same fixture vector, which is exactly the "server has the same data as
+// last time" scenario the idempotency test below needs. Nothing here
+// calls wk_api::fetch_* or http::get -- see the file header comment.
+SyncFetchers fixture_fetchers(const std::vector<Subject>& subjects, const std::vector<ReviewStat>& stats) {
+    SyncFetchers fetchers;
+    fetchers.subjects = [subjects](const std::string&) { return subjects; };
+    fetchers.review_statistics = [stats](const std::string&) { return stats; };
+    fetchers.assignments = [](const std::string&) { return std::vector<Assignment>{}; };
+    fetchers.study_materials = [](const std::string&) { return std::vector<wk_api::StudyMaterial>{}; };
+    return fetchers;
+}
 
-    for (const auto& stat : stats) {
-        if (!store.insert_stat_snapshot(stat)) {
-            continue;  // already-seen (subject_id, data_updated_at); the idempotency gate
-        }
-        const std::optional<ReviewStat> prev = store.previous_snapshot(stat.subject_id, stat.data_updated_at);
-        for (const auto& event : classify_failure(prev, stat)) {
-            store.insert_failure_event(event);
-        }
-    }
-
-    std::vector<FailureEvent> ungrouped = store.failure_events_without_session();
-    const std::vector<Session> sessions = group_into_sessions(ungrouped, session_gap_minutes);
-    std::vector<long long> real_session_ids;
-    real_session_ids.reserve(sessions.size());
-    for (const auto& session : sessions) {
-        real_session_ids.push_back(store.insert_session(session));
-    }
-    for (const auto& event : ungrouped) {
-        store.assign_failure_event_session(event.id,
-                                            real_session_ids.at(static_cast<size_t>(event.session_id)));
-    }
-
-    if (!subjects.empty()) {
-        const std::vector<Subject> graph_subjects = store.all_subjects();
-        const std::vector<SimilarityEdge> edges = build_similarity_graph(graph_subjects);
-        store.replace_similarity_edges(edges);
-    }
+// Runs the real sync pipeline against `store` with fixture data: upsert
+// subjects, snapshot/delta/failure detection, cursor advances, session
+// grouping, similarity-graph rebuild -- all of it ::run_sync's own code,
+// not a copy of it.
+SyncSummary fixture_sync(Store& store, const std::vector<Subject>& subjects,
+                          const std::vector<ReviewStat>& stats, int session_gap_minutes = 45) {
+    return run_sync(store, fixture_fetchers(subjects, stats), session_gap_minutes);
 }
 
 }  // namespace
@@ -174,7 +161,16 @@ TEST_CASE("sync -> report -> drill pipeline composes end-to-end against a seeded
     std::filesystem::remove(db_path);
     Store store(db_path);
 
-    fixture_sync(store, fixture_subjects(), fixture_stats());
+    const SyncSummary summary = fixture_sync(store, fixture_subjects(), fixture_stats());
+    CHECK(summary.subjects == 3);
+    CHECK(summary.stats == 2);
+    CHECK(summary.failures == 2);            // one cold-start meaning failure each for 太 and 犬
+    CHECK(summary.similarity_edge_count > 0);  // subjects changed, so the graph was rebuilt
+
+    // The pipeline's cursor bookkeeping ran too (main.cpp does not do this
+    // itself -- it lives in run_sync, so this test covers it).
+    CHECK(store.get_meta("subjects_cursor").value_or("") == "2026-08-01T00:00:00Z");
+    CHECK(store.get_meta("stats_cursor").value_or("") == "2026-08-15T10:00:00.000000Z");
 
     // --- report step: reload everything from Store, exactly like
     // main.cpp's run_report does ---
@@ -250,4 +246,50 @@ TEST_CASE("re-running the sync path twice against identical fixture input produc
     CHECK(query_scalar_int(db_path, "SELECT COUNT(*) FROM stat_snapshot;") == stat_count_1);
     CHECK(query_scalar_int(db_path, "SELECT COUNT(*) FROM similarity_edge;") == edge_count_1);
     CHECK(query_scalar_int(db_path, "SELECT COUNT(*) FROM failure_event;") == failure_event_count_1);
+}
+
+TEST_CASE("sync rebuilds the similarity graph when the edge table is empty, even with no new subjects",
+          "[integration][regression]") {
+    // Regression guard for the mid-sync-failure trap: run_sync advances
+    // subjects_cursor immediately after the subjects fetch, but the graph
+    // rebuild happens at the very end. If a later step throws (rate-limit
+    // exhaustion, transport error), the next sync fetches zero subjects
+    // because the cursor is already current -- and a rebuild gated solely
+    // on "subjects changed this run" would then never fire again, leaving
+    // the similarity graph permanently empty with no error and no
+    // recovery path.
+    const std::string db_path = temp_db_path("empty_graph_recovery");
+    std::filesystem::remove(db_path);
+    Store store(db_path);
+
+    // The state such an interrupted sync leaves behind: subjects present,
+    // cursor advanced, similarity_edge empty.
+    for (const auto& subject : fixture_subjects()) {
+        store.upsert_subject(subject);
+    }
+    store.set_meta("subjects_cursor", "2026-08-01T00:00:00Z");
+    REQUIRE(store.all_similarity_edges().empty());
+
+    // The next `wkr sync`: the (simulated) server reports nothing new.
+    const SyncSummary summary = fixture_sync(store, /*subjects=*/{}, /*stats=*/{});
+
+    REQUIRE(summary.subjects == 0);
+    CHECK(summary.similarity_edge_count > 0);
+    CHECK_FALSE(store.all_similarity_edges().empty());
+}
+
+TEST_CASE("sync still skips the graph rebuild when nothing changed and a graph already exists",
+          "[integration]") {
+    // The other half of the gate: the empty-table clause above must not
+    // turn the rebuild into an unconditional every-sync cost.
+    const std::string db_path = temp_db_path("skip_rebuild");
+    std::filesystem::remove(db_path);
+    Store store(db_path);
+
+    const SyncSummary first = fixture_sync(store, fixture_subjects(), fixture_stats());
+    REQUIRE(first.similarity_edge_count > 0);
+
+    const SyncSummary second = fixture_sync(store, /*subjects=*/{}, /*stats=*/{});
+    CHECK(second.similarity_edge_count == -1);  // -1 == "skipped, nothing changed"
+    CHECK_FALSE(store.all_similarity_edges().empty());
 }

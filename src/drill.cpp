@@ -228,6 +228,51 @@ int parse_choice(const std::string& raw_input, const std::vector<const Subject*>
     return -1;
 }
 
+// True when `option` legitimately also answers to `shown_text` on this
+// question's axis -- i.e. picking it is not actually wrong.
+//
+// Forced-choice distractors are drawn from the same similarity cluster
+// on purpose, and similarity.cpp gives a Reading edge its top weight
+// (0.8) exactly when BOTH subjects share that reading as their primary
+// reading. Those pairs sort highest in the confusion list, so they are
+// the ones the drill reaches most often -- and for them the distractor
+// genuinely is read the way the prompt says. Grading purely on "did you
+// pick the index we designated correct" marks such an answer wrong
+// despite it being right, which this predicate prevents.
+//
+// Readings are compared verbatim (kana; no case to fold). Meanings are
+// compared case-insensitively against the option's accepted meanings
+// plus its whitelisted auxiliary meanings -- the same set WaniKani
+// itself would accept.
+bool option_also_has_shown_text(const Subject& option, const std::string& shown_text, bool reading_axis) {
+    const std::string wanted = trim(shown_text);
+    if (wanted.empty()) {
+        return false;
+    }
+
+    if (reading_axis) {
+        for (const auto& r : option.readings) {
+            if (trim(r.reading) == wanted) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    const std::string lowered = lower(wanted);
+    for (const auto& m : option.meanings) {
+        if (m.accepted_answer && lower(trim(m.meaning)) == lowered) {
+            return true;
+        }
+    }
+    for (const auto& am : option.auxiliary_meanings) {
+        if (am.type == "whitelist" && lower(trim(am.meaning)) == lowered) {
+            return true;
+        }
+    }
+    return false;
+}
+
 // Runs one forced-choice question about `pair`, quizzing on `a_id` (the
 // "correct" subject -- its meaning or reading is what's shown) with
 // `b_id` as the confusable pair member that also appears as an option.
@@ -289,7 +334,13 @@ bool run_forced_choice_question(const ConfusionPair& pair, bool ask_reading, int
     }
 
     const int chosen = parse_choice(line, options);
-    const bool is_correct = (chosen >= 0 && static_cast<size_t>(chosen) == correct_index);
+    // Accept either the designated correct option or any other option
+    // that legitimately shares the shown reading/meaning -- see
+    // option_also_has_shown_text.
+    const bool is_correct =
+        chosen >= 0 && (static_cast<size_t>(chosen) == correct_index ||
+                        option_also_has_shown_text(*options[static_cast<size_t>(chosen)], shown_text,
+                                                    used_reading));
 
     if (is_correct) {
         out << colorize("Correct!", kColorGreen, use_color) << "\n";
