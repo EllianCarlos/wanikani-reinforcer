@@ -1,3 +1,6 @@
+#include <array>
+#include <cstdio>
+#include <ctime>
 #include <exception>
 #include <iostream>
 #include <optional>
@@ -5,7 +8,9 @@
 #include <vector>
 
 #include "config.h"
+#include "confusion.h"
 #include "model.h"
+#include "report.h"
 #include "similarity.h"
 #include "store.h"
 #include "wk_api.h"
@@ -138,9 +143,50 @@ int run_sync(int session_gap_minutes) {
     }
 }
 
+// Current UTC time in the same format model.h's parse_wk_timestamp
+// expects ("2026-08-16T03:14:07Z"), used as compute_confusion_pairs'
+// decay reference point. Mirrors store.cpp's now_iso8601 (kept private
+// there), since main.cpp needs the same "now, as WaniKani-style text"
+// value but confusion.cpp deliberately takes it as a parameter rather
+// than reading the clock itself, to stay testable.
+std::string now_iso8601() {
+    const std::time_t now = std::time(nullptr);
+    std::tm utc{};
+    gmtime_r(&now, &utc);
+    std::array<char, 32> buf{};
+    std::snprintf(buf.data(), buf.size(), "%04d-%02d-%02dT%02d:%02d:%02dZ", utc.tm_year + 1900,
+                  utc.tm_mon + 1, utc.tm_mday, utc.tm_hour, utc.tm_min, utc.tm_sec);
+    return std::string(buf.data());
+}
+
 int run_report() {
-    std::cout << "not implemented yet" << std::endl;
-    return 0;
+    try {
+        Config config = Config::load();
+        Store store(config.db_path);
+
+        const std::vector<Subject> subjects = store.all_subjects();
+        if (subjects.empty()) {
+            std::cout << "No data yet — run 'wkr sync' first." << std::endl;
+            return 0;
+        }
+
+        const std::vector<ReviewStat> latest_stats = store.latest_stat_per_subject();
+        const std::vector<Session> sessions = store.all_sessions();
+        const std::vector<FailureEvent> events = store.all_failure_events();
+        const std::vector<SimilarityEdge> edges = store.all_similarity_edges();
+        const std::vector<Assignment> assignments = store.all_assignments();
+        const std::vector<wk_api::StudyMaterial> study_materials = store.all_study_materials();
+
+        const std::vector<LeechEntry> leeches = compute_leech_scores(latest_stats);
+        const std::vector<ConfusionPair> pairs =
+            compute_confusion_pairs(sessions, events, edges, leeches, now_iso8601());
+
+        print_report(pairs, leeches, subjects, assignments, study_materials, latest_stats, std::cout);
+        return 0;
+    } catch (const std::exception& e) {
+        std::cerr << "error: " << e.what() << std::endl;
+        return 1;
+    }
 }
 
 int run_drill() {

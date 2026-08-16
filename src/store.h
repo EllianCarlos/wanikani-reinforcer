@@ -81,6 +81,38 @@ public:
     // the pair (a_id == subject_id OR b_id == subject_id).
     std::vector<SimilarityEdge> edges_for(long long subject_id);
 
+    // Every similarity_edge row in the table. Used by `wkr report`, which
+    // (unlike edges_for) needs the whole graph at once to score confusion
+    // pairs rather than one subject's neighborhood.
+    std::vector<SimilarityEdge> all_similarity_edges();
+
+    // One ReviewStat per subject: its most recent stat_snapshot row (the
+    // row with the largest data_updated_at for that subject_id). Relies
+    // on SQLite's documented "bare column" behavior — when a query's only
+    // aggregate is MAX()/MIN(), the non-aggregated columns in the same
+    // SELECT come from the row that produced that MAX/MIN — so this is a
+    // single GROUP BY query rather than a correlated subquery per row.
+    // subject_type is left empty (stat_snapshot does not persist it; see
+    // previous_snapshot, which has the same limitation).
+    std::vector<ReviewStat> latest_stat_per_subject();
+
+    // Every session row, ordered by started_at ascending.
+    std::vector<Session> all_sessions();
+
+    // Every failure_event row (assigned to a session or not), ordered by
+    // occurred_at ascending, with session_id populated (-1 if the DB
+    // column is NULL). Unlike failure_events_without_session, this is not
+    // filtered to session_id IS NULL — confusion-pair scoring needs every
+    // event's session membership, not just the ones sync hasn't grouped
+    // yet.
+    std::vector<FailureEvent> all_failure_events();
+
+    // Every assignment row.
+    std::vector<Assignment> all_assignments();
+
+    // Every study_material row.
+    std::vector<wk_api::StudyMaterial> all_study_materials();
+
 private:
     sqlite3* db_ = nullptr;
 };

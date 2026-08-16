@@ -341,3 +341,108 @@ TEST_CASE("replace_similarity_edges round-trips through edges_for and fully repl
     REQUIRE(for_9.size() == 1);
     CHECK(for_9[0].kind == EdgeKind::CharShape);
 }
+
+TEST_CASE("all_similarity_edges returns every edge regardless of endpoint", "[store]") {
+    const std::string db_path = temp_db_path("all_similarity_edges");
+    std::filesystem::remove(db_path);
+    Store store(db_path);
+
+    store.replace_similarity_edges({
+        SimilarityEdge{1, 2, EdgeKind::WkVisual, 1.0},
+        SimilarityEdge{3, 4, EdgeKind::Meaning, 0.7},
+    });
+
+    const std::vector<SimilarityEdge> all = store.all_similarity_edges();
+    REQUIRE(all.size() == 2);
+}
+
+TEST_CASE("latest_stat_per_subject returns only the newest snapshot for each subject", "[store]") {
+    const std::string db_path = temp_db_path("latest_stat");
+    std::filesystem::remove(db_path);
+    Store store(db_path);
+
+    store.insert_stat_snapshot(make_stat(1, "2026-08-16T00:00:00.000000Z", 1));
+    store.insert_stat_snapshot(make_stat(1, "2026-08-16T02:00:00.000000Z", 5));
+    store.insert_stat_snapshot(make_stat(2, "2026-08-16T01:00:00.000000Z", 9));
+
+    const std::vector<ReviewStat> latest = store.latest_stat_per_subject();
+    REQUIRE(latest.size() == 2);
+
+    bool found_1 = false;
+    bool found_2 = false;
+    for (const auto& stat : latest) {
+        if (stat.subject_id == 1) {
+            CHECK(stat.data_updated_at == "2026-08-16T02:00:00.000000Z");
+            CHECK(stat.meaning_incorrect == 5);
+            found_1 = true;
+        } else if (stat.subject_id == 2) {
+            CHECK(stat.meaning_incorrect == 9);
+            found_2 = true;
+        }
+    }
+    CHECK(found_1);
+    CHECK(found_2);
+}
+
+TEST_CASE("all_sessions and all_failure_events return every row including assigned ones", "[store]") {
+    const std::string db_path = temp_db_path("all_sessions_events");
+    std::filesystem::remove(db_path);
+    Store store(db_path);
+
+    FailureEvent e1;
+    e1.subject_id = 1;
+    e1.occurred_at = "2026-08-16T00:00:00.000000Z";
+    e1.kind = FailureKind::Meaning;
+    store.insert_failure_event(e1);
+
+    std::vector<FailureEvent> unassigned = store.failure_events_without_session();
+    REQUIRE(unassigned.size() == 1);
+
+    Session session{0, "2026-08-16T00:00:00.000000Z", "2026-08-16T00:00:00.000000Z"};
+    const long long session_id = store.insert_session(session);
+    store.assign_failure_event_session(unassigned[0].id, session_id);
+
+    // Once assigned, failure_events_without_session no longer sees it...
+    CHECK(store.failure_events_without_session().empty());
+
+    // ...but all_failure_events and all_sessions still do, with the
+    // session_id populated.
+    const std::vector<Session> sessions = store.all_sessions();
+    REQUIRE(sessions.size() == 1);
+    CHECK(sessions[0].id == session_id);
+
+    const std::vector<FailureEvent> all_events = store.all_failure_events();
+    REQUIRE(all_events.size() == 1);
+    CHECK(all_events[0].session_id == session_id);
+}
+
+TEST_CASE("all_assignments and all_study_materials return every row", "[store]") {
+    const std::string db_path = temp_db_path("all_assignments_materials");
+    std::filesystem::remove(db_path);
+    Store store(db_path);
+
+    Assignment assignment;
+    assignment.id = 1;
+    assignment.subject_id = 5;
+    assignment.subject_type = "kanji";
+    assignment.srs_stage = 3;
+    assignment.data_updated_at = "2026-08-16T00:00:00.000000Z";
+    store.upsert_assignment(assignment);
+
+    wk_api::StudyMaterial material;
+    material.subject_id = 5;
+    material.subject_type = "kanji";
+    material.meaning_note = "note";
+    material.data_updated_at = "2026-08-16T00:00:00.000000Z";
+    store.upsert_study_material(material);
+
+    const std::vector<Assignment> assignments = store.all_assignments();
+    REQUIRE(assignments.size() == 1);
+    CHECK(assignments[0].subject_id == 5);
+    CHECK(assignments[0].srs_stage == 3);
+
+    const std::vector<wk_api::StudyMaterial> materials = store.all_study_materials();
+    REQUIRE(materials.size() == 1);
+    CHECK(materials[0].subject_id == 5);
+    CHECK(materials[0].meaning_note == "note");
+}
