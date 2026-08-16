@@ -471,3 +471,46 @@ TEST_CASE("all_assignments and all_study_materials return every row", "[store]")
     CHECK(materials[0].subject_id == 5);
     CHECK(materials[0].meaning_note == "note");
 }
+
+TEST_CASE("all_drill_results returns every recorded drill_result row", "[store]") {
+    const std::string db_path = temp_db_path("all_drill_results");
+    std::filesystem::remove(db_path);
+    Store store(db_path);
+
+    store.insert_drill_result(DrillResult{1, 2, true, "2026-08-16T00:00:00Z"});
+    store.insert_drill_result(DrillResult{2, 1, false, "2026-08-16T00:05:00Z"});
+
+    const std::vector<DrillResult> results = store.all_drill_results();
+    REQUIRE(results.size() == 2);
+    CHECK(results[0].subject_id == 1);
+    CHECK(results[0].distractor_id == 2);
+    CHECK(results[0].correct == true);
+    CHECK(results[1].subject_id == 2);
+    CHECK(results[1].correct == false);
+}
+
+TEST_CASE("stat_snapshots_for returns every snapshot for a subject, ordered by data_updated_at ascending",
+          "[store]") {
+    const std::string db_path = temp_db_path("stat_snapshots_for");
+    std::filesystem::remove(db_path);
+    Store store(db_path);
+
+    store.insert_stat_snapshot(make_stat(1, "2026-08-16T02:00:00.000000Z", 5));
+    store.insert_stat_snapshot(make_stat(1, "2026-08-16T00:00:00.000000Z", 1));
+    store.insert_stat_snapshot(make_stat(2, "2026-08-16T01:00:00.000000Z", 9));
+
+    const std::vector<ReviewStat> history = store.stat_snapshots_for(1);
+    REQUIRE(history.size() == 2);
+    CHECK(history[0].meaning_incorrect == 1);
+    CHECK(history[0].data_updated_at == "2026-08-16T00:00:00.000000Z");
+    CHECK(history[1].meaning_incorrect == 5);
+    CHECK(history[1].data_updated_at == "2026-08-16T02:00:00.000000Z");
+}
+
+TEST_CASE("stat_snapshots_for returns empty for a subject with no snapshots", "[store]") {
+    const std::string db_path = temp_db_path("stat_snapshots_for_empty");
+    std::filesystem::remove(db_path);
+    Store store(db_path);
+
+    CHECK(store.stat_snapshots_for(999).empty());
+}

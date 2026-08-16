@@ -165,6 +165,48 @@ struct DrillResult {
     std::string answered_at;
 };
 
+// Aggregate drill_result-table stats, produced by stats.{h,cpp}'s
+// compute_drill_stats. `total`/`correct` cover every recorded
+// drill_result row; `current_streak` counts consecutive correct answers
+// counting backward from the most recently answered row (0 if the most
+// recent answer was wrong, or if there are no rows at all).
+struct DrillStats {
+    int total = 0;
+    int correct = 0;
+    int current_streak = 0;
+};
+
+// One (subject_id, distractor_id) pair from drill_result, ranked by how
+// often that exact pairing was answered incorrectly. Produced by
+// stats.{h,cpp}'s compute_missed_pairs.
+struct MissedPairCount {
+    long long subject_id;
+    long long distractor_id;
+    int miss_count;
+};
+
+// Aggregate session/failure_event stats, produced by stats.{h,cpp}'s
+// compute_session_stats.
+struct SessionStats {
+    int session_count = 0;
+    double avg_failures_per_session = 0.0;
+    int sessions_last_7_days = 0;
+};
+
+// One subject's accuracy trend across every stat_snapshot Store has for
+// it, produced by stats.{h,cpp}'s compute_leech_trend. `first_percentage`/
+// `last_percentage` are percentage_correct from the chronologically
+// oldest and newest snapshot passed in; `delta` = last - first (positive
+// means improving). `snapshot_count` lets callers apply the "needs 2+
+// syncs to say anything" honesty gate themselves before printing.
+struct LeechTrendEntry {
+    long long subject_id;
+    int snapshot_count = 0;
+    int first_percentage = 0;
+    int last_percentage = 0;
+    int delta = 0;
+};
+
 // Parses a WaniKani RFC 3339 timestamp, e.g.
 // "2026-08-16T03:14:07.000000Z", into a time_point. WaniKani always
 // reports UTC with a literal trailing "Z", so this deliberately does not
