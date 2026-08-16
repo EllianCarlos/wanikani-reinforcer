@@ -10,6 +10,28 @@
 
 namespace {
 
+// Raw ANSI escape codes -- no ncurses/terminal-capability library, per
+// the plan. Kept as file-local constants/helper (duplicated in drill.cpp)
+// rather than shared via a new header, consistent with how the rest of
+// this codebase keeps small per-file helpers in anonymous namespaces
+// (see display_name's comment just below for the same pattern).
+constexpr const char* kColorReset = "\033[0m";
+constexpr const char* kColorBoldRed = "\033[1;31m";
+constexpr const char* kColorCyan = "\033[36m";
+
+// Wraps `text` in `code`...reset when use_color is true; returns `text`
+// unchanged otherwise (and always for an empty string, so an empty
+// LEECH/Focus segment never emits a stray pair of escape codes). Because
+// this only ever wraps a whole segment rather than splicing into the
+// middle of one, a substring check against the plain text inside `text`
+// still finds it either way.
+std::string colorize(const std::string& text, const char* code, bool use_color) {
+    if (!use_color || text.empty()) {
+        return text;
+    }
+    return std::string(code) + text + kColorReset;
+}
+
 // Radicals can be image-only (empty `characters`); fall back to the slug
 // wherever a subject needs to be printed. Mirrors advice.cpp's helper of
 // the same name/behavior — each stays a small self-contained file-local
@@ -134,7 +156,7 @@ void print_report(const std::vector<ConfusionPair>& pairs, const std::vector<Lee
                    const std::vector<Subject>& all_subjects,
                    const std::vector<Assignment>& all_assignments,
                    const std::vector<wk_api::StudyMaterial>& all_study_materials,
-                   const std::vector<ReviewStat>& latest_stats, std::ostream& out) {
+                   const std::vector<ReviewStat>& latest_stats, std::ostream& out, bool use_color) {
     if (leeches.empty()) {
         out << "No leeches found yet. Keep reviewing and run 'wkr sync' again.\n";
         return;
@@ -182,8 +204,9 @@ void print_report(const std::vector<ConfusionPair>& pairs, const std::vector<Lee
         const int srs_stage =
             srs_stage_by_subject.count(leech.subject_id) ? srs_stage_by_subject.at(leech.subject_id) : 0;
 
-        out << "LEECH  " << pad_to_width(display_name(subject), max_chars_width) << "  "
-            << meanings_summary(subject) << "   " << percentage << "% correct   "
+        out << colorize("LEECH", kColorBoldRed, use_color) << "  "
+            << colorize(pad_to_width(display_name(subject), max_chars_width), kColorBoldRed, use_color)
+            << "  " << meanings_summary(subject) << "   " << percentage << "% correct   "
             << srs_stage_name(srs_stage) << "\n";
         out << "  You fail the " << (leech.is_meaning ? "MEANING" : "READING") << ", not the "
             << (leech.is_meaning ? "reading" : "meaning") << ".\n";
@@ -224,7 +247,7 @@ void print_report(const std::vector<ConfusionPair>& pairs, const std::vector<Lee
                 }
                 const std::string advice = generate_advice(subject, *neighbor_it->second, top->dominant_kind,
                                                              failure_kind, study_material, all_subjects);
-                out << "  Focus:\n";
+                out << colorize("  Focus:", kColorCyan, use_color) << "\n";
                 print_indented(out, advice, "    ");
             }
         }

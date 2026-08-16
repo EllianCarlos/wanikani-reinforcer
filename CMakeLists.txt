@@ -5,7 +5,7 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-add_compile_options(-Wall -Wextra)
+add_compile_options(-Wall -Wextra -Werror)
 
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(CURL REQUIRED IMPORTED_TARGET libcurl)
@@ -46,6 +46,7 @@ add_executable(wkr_tests
     tests/test_confusion.cpp
     tests/test_advice.cpp
     tests/test_drill.cpp
+    tests/test_integration.cpp
 )
 target_link_libraries(wkr_tests PRIVATE wkr_lib Catch2::Catch2WithMain)
 

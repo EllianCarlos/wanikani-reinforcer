@@ -22,8 +22,18 @@ constexpr int kReportTopN = 10;
 // sketch (which also omits it) for the same reason
 // compute_confusion_pairs needed `leeches` added — the data has to come
 // from somewhere, and Store is the only place that has it.
+//
+// `use_color`, when true, wraps the LEECH label/characters (bold red) and
+// the "Focus:" header (cyan) in raw ANSI escape codes; the surrounding
+// text and structure are unchanged either way, so callers doing substring
+// checks on the plain-text parts are unaffected. Defaults to false so
+// every existing call site (in particular, unit tests asserting on exact
+// output) keeps behaving exactly as before without needing to pass
+// anything; main.cpp is the only caller expected to pass true, gated on
+// an isatty() check of the real terminal.
 void print_report(const std::vector<ConfusionPair>& pairs, const std::vector<LeechEntry>& leeches,
                    const std::vector<Subject>& all_subjects,
                    const std::vector<Assignment>& all_assignments,
                    const std::vector<wk_api::StudyMaterial>& all_study_materials,
-                   const std::vector<ReviewStat>& latest_stats, std::ostream& out);
+                   const std::vector<ReviewStat>& latest_stats, std::ostream& out,
+                   bool use_color = false);
