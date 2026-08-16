@@ -694,3 +694,209 @@ std::vector<SimilarityEdge> Store::edges_for(long long subject_id) {
     sqlite3_finalize(stmt);
     return edges;
 }
+
+std::vector<SimilarityEdge> Store::all_similarity_edges() {
+    static const char* sql = "SELECT a_id, b_id, kind, weight FROM similarity_edge;";
+
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+        throw std::runtime_error(std::string("prepare all_similarity_edges failed: ") +
+                                  sqlite3_errmsg(db_));
+    }
+
+    std::vector<SimilarityEdge> edges;
+    int rc;
+    while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+        SimilarityEdge edge;
+        edge.a_id = sqlite3_column_int64(stmt, 0);
+        edge.b_id = sqlite3_column_int64(stmt, 1);
+        const unsigned char* kind_text = sqlite3_column_text(stmt, 2);
+        edge.kind =
+            edge_kind_from_text(kind_text != nullptr ? reinterpret_cast<const char*>(kind_text) : "");
+        edge.weight = sqlite3_column_double(stmt, 3);
+        edges.push_back(edge);
+    }
+    if (rc != SQLITE_DONE) {
+        const std::string message = sqlite3_errmsg(db_);
+        sqlite3_finalize(stmt);
+        throw std::runtime_error("all_similarity_edges failed: " + message);
+    }
+    sqlite3_finalize(stmt);
+    return edges;
+}
+
+std::vector<ReviewStat> Store::latest_stat_per_subject() {
+    static const char* sql =
+        "SELECT subject_id, MAX(data_updated_at) AS data_updated_at, meaning_correct, "
+        "meaning_incorrect, reading_correct, reading_incorrect, meaning_current_streak, "
+        "reading_current_streak, percentage_correct FROM stat_snapshot GROUP BY subject_id;";
+
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+        throw std::runtime_error(std::string("prepare latest_stat_per_subject failed: ") +
+                                  sqlite3_errmsg(db_));
+    }
+
+    std::vector<ReviewStat> stats;
+    int rc;
+    while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+        ReviewStat stat;
+        stat.subject_id = sqlite3_column_int64(stmt, 0);
+        const unsigned char* updated = sqlite3_column_text(stmt, 1);
+        stat.data_updated_at = updated != nullptr ? reinterpret_cast<const char*>(updated) : "";
+        stat.meaning_correct = sqlite3_column_int(stmt, 2);
+        stat.meaning_incorrect = sqlite3_column_int(stmt, 3);
+        stat.reading_correct = sqlite3_column_int(stmt, 4);
+        stat.reading_incorrect = sqlite3_column_int(stmt, 5);
+        stat.meaning_current_streak = sqlite3_column_int(stmt, 6);
+        stat.reading_current_streak = sqlite3_column_int(stmt, 7);
+        stat.percentage_correct = sqlite3_column_int(stmt, 8);
+        stats.push_back(stat);
+    }
+    if (rc != SQLITE_DONE) {
+        const std::string message = sqlite3_errmsg(db_);
+        sqlite3_finalize(stmt);
+        throw std::runtime_error("latest_stat_per_subject failed: " + message);
+    }
+    sqlite3_finalize(stmt);
+    return stats;
+}
+
+std::vector<Session> Store::all_sessions() {
+    static const char* sql = "SELECT id, started_at, ended_at FROM session ORDER BY started_at ASC;";
+
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+        throw std::runtime_error(std::string("prepare all_sessions failed: ") + sqlite3_errmsg(db_));
+    }
+
+    std::vector<Session> sessions;
+    int rc;
+    while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+        Session session;
+        session.id = sqlite3_column_int64(stmt, 0);
+        const unsigned char* started = sqlite3_column_text(stmt, 1);
+        session.started_at = started != nullptr ? reinterpret_cast<const char*>(started) : "";
+        const unsigned char* ended = sqlite3_column_text(stmt, 2);
+        session.ended_at = ended != nullptr ? reinterpret_cast<const char*>(ended) : "";
+        sessions.push_back(std::move(session));
+    }
+    if (rc != SQLITE_DONE) {
+        const std::string message = sqlite3_errmsg(db_);
+        sqlite3_finalize(stmt);
+        throw std::runtime_error("all_sessions failed: " + message);
+    }
+    sqlite3_finalize(stmt);
+    return sessions;
+}
+
+std::vector<FailureEvent> Store::all_failure_events() {
+    static const char* sql =
+        "SELECT id, subject_id, occurred_at, kind, session_id, cold_start FROM failure_event "
+        "ORDER BY occurred_at ASC;";
+
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+        throw std::runtime_error(std::string("prepare all_failure_events failed: ") +
+                                  sqlite3_errmsg(db_));
+    }
+
+    std::vector<FailureEvent> events;
+    int rc;
+    while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+        FailureEvent event;
+        event.id = sqlite3_column_int64(stmt, 0);
+        event.subject_id = sqlite3_column_int64(stmt, 1);
+        const unsigned char* occurred = sqlite3_column_text(stmt, 2);
+        event.occurred_at = occurred != nullptr ? reinterpret_cast<const char*>(occurred) : "";
+        const unsigned char* kind = sqlite3_column_text(stmt, 3);
+        event.kind = failure_kind_from_text(kind != nullptr ? reinterpret_cast<const char*>(kind) : "");
+        event.session_id =
+            sqlite3_column_type(stmt, 4) == SQLITE_NULL ? -1 : sqlite3_column_int64(stmt, 4);
+        event.cold_start = sqlite3_column_int(stmt, 5) != 0;
+        events.push_back(event);
+    }
+    if (rc != SQLITE_DONE) {
+        const std::string message = sqlite3_errmsg(db_);
+        sqlite3_finalize(stmt);
+        throw std::runtime_error("all_failure_events failed: " + message);
+    }
+    sqlite3_finalize(stmt);
+    return events;
+}
+
+std::vector<Assignment> Store::all_assignments() {
+    static const char* sql =
+        "SELECT id, subject_id, subject_type, srs_stage, available_at, passed_at, data_updated_at "
+        "FROM assignment;";
+
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+        throw std::runtime_error(std::string("prepare all_assignments failed: ") + sqlite3_errmsg(db_));
+    }
+
+    auto text_col = [&](int idx) -> std::string {
+        const unsigned char* t = sqlite3_column_text(stmt, idx);
+        return t != nullptr ? std::string(reinterpret_cast<const char*>(t)) : std::string();
+    };
+
+    std::vector<Assignment> assignments;
+    int rc;
+    while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+        Assignment assignment;
+        assignment.id = sqlite3_column_int64(stmt, 0);
+        assignment.subject_id = sqlite3_column_int64(stmt, 1);
+        assignment.subject_type = text_col(2);
+        assignment.srs_stage = sqlite3_column_int(stmt, 3);
+        assignment.available_at = text_col(4);
+        assignment.passed_at = text_col(5);
+        assignment.data_updated_at = text_col(6);
+        assignments.push_back(std::move(assignment));
+    }
+    if (rc != SQLITE_DONE) {
+        const std::string message = sqlite3_errmsg(db_);
+        sqlite3_finalize(stmt);
+        throw std::runtime_error("all_assignments failed: " + message);
+    }
+    sqlite3_finalize(stmt);
+    return assignments;
+}
+
+std::vector<wk_api::StudyMaterial> Store::all_study_materials() {
+    static const char* sql =
+        "SELECT subject_id, subject_type, meaning_note, reading_note, meaning_synonyms_json, "
+        "data_updated_at FROM study_material;";
+
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+        throw std::runtime_error(std::string("prepare all_study_materials failed: ") +
+                                  sqlite3_errmsg(db_));
+    }
+
+    auto text_col = [&](int idx) -> std::string {
+        const unsigned char* t = sqlite3_column_text(stmt, idx);
+        return t != nullptr ? std::string(reinterpret_cast<const char*>(t)) : std::string();
+    };
+
+    std::vector<wk_api::StudyMaterial> materials;
+    int rc;
+    while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+        wk_api::StudyMaterial material;
+        material.subject_id = sqlite3_column_int64(stmt, 0);
+        material.subject_type = text_col(1);
+        material.meaning_note = text_col(2);
+        material.reading_note = text_col(3);
+        const std::string synonyms_text = text_col(4);
+        material.meaning_synonyms =
+            synonyms_text.empty() ? std::vector<std::string>{} : json::parse(synonyms_text).get<std::vector<std::string>>();
+        material.data_updated_at = text_col(5);
+        materials.push_back(std::move(material));
+    }
+    if (rc != SQLITE_DONE) {
+        const std::string message = sqlite3_errmsg(db_);
+        sqlite3_finalize(stmt);
+        throw std::runtime_error("all_study_materials failed: " + message);
+    }
+    sqlite3_finalize(stmt);
+    return materials;
+}

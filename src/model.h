@@ -127,6 +127,31 @@ struct SimilarityEdge {
     double weight;
 };
 
+// A ranked confusion candidate between two subjects, produced by
+// confusion.{h,cpp}'s compute_confusion_pairs. `likely == false` means
+// both subjects were actually observed failed together in the same
+// session (the strong "co-failure" signal); `likely == true` means this
+// is a single-sided inference from the similarity graph alone (a leech
+// with no observed co-failure, paired with its strongest neighbor edge)
+// so there's not yet enough session history to say the user really
+// confuses these two — just that they plausibly could.
+struct ConfusionPair {
+    long long a_id, b_id;
+    double score;
+    EdgeKind dominant_kind;   // the edge kind contributing the most weight
+    bool likely;              // true = single-sided inference (see above), false = co-failure observed
+};
+
+// One ranked leech candidate, produced by confusion.{h,cpp}'s
+// compute_leech_scores from a subject's most recent stat_snapshot.
+// `is_meaning` says which of the meaning/reading axis produced the
+// reported (larger) `leech_score`.
+struct LeechEntry {
+    long long subject_id;
+    double leech_score;
+    bool is_meaning;           // true if the meaning score is the larger/reported one, false if reading
+};
+
 // Parses a WaniKani RFC 3339 timestamp, e.g.
 // "2026-08-16T03:14:07.000000Z", into a time_point. WaniKani always
 // reports UTC with a literal trailing "Z", so this deliberately does not
