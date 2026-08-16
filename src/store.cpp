@@ -900,3 +900,28 @@ std::vector<wk_api::StudyMaterial> Store::all_study_materials() {
     sqlite3_finalize(stmt);
     return materials;
 }
+
+void Store::insert_drill_result(const DrillResult& result) {
+    static const char* sql =
+        "INSERT INTO drill_result (subject_id, distractor_id, correct, answered_at) "
+        "VALUES (?, ?, ?, ?);";
+
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+        throw std::runtime_error(std::string("prepare insert_drill_result failed: ") +
+                                  sqlite3_errmsg(db_));
+    }
+
+    sqlite3_bind_int64(stmt, 1, result.subject_id);
+    sqlite3_bind_int64(stmt, 2, result.distractor_id);
+    sqlite3_bind_int(stmt, 3, result.correct ? 1 : 0);
+    sqlite3_bind_text(stmt, 4, result.answered_at.c_str(), -1, SQLITE_TRANSIENT);
+
+    const int rc = sqlite3_step(stmt);
+    if (rc != SQLITE_DONE) {
+        const std::string message = sqlite3_errmsg(db_);
+        sqlite3_finalize(stmt);
+        throw std::runtime_error("insert_drill_result failed: " + message);
+    }
+    sqlite3_finalize(stmt);
+}

@@ -113,6 +113,12 @@ public:
     // Every study_material row.
     std::vector<wk_api::StudyMaterial> all_study_materials();
 
+    // Inserts a drill_result row. This is the only write drill.cpp
+    // performs: a local record of one answered quiz question, never sent
+    // to WaniKani (there is no WaniKani drill-result endpoint at all —
+    // this table exists purely for wkr's own local history).
+    void insert_drill_result(const DrillResult& result);
+
 private:
     sqlite3* db_ = nullptr;
 };

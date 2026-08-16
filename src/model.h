@@ -152,6 +152,19 @@ struct LeechEntry {
     bool is_meaning;           // true if the meaning score is the larger/reported one, false if reading
 };
 
+// One answered drill question, produced by drill.{h,cpp}'s run_drill and
+// persisted via Store::insert_drill_result. `subject_id` is the subject
+// actually being quizzed (the correct answer); `distractor_id` is the
+// other subject in the ConfusionPair the question was drawn from (see
+// drill.h for the exact rule per question type). `answered_at` is the
+// current UTC time in ISO-8601 at the moment the answer was read.
+struct DrillResult {
+    long long subject_id;
+    long long distractor_id;
+    bool correct;
+    std::string answered_at;
+};
+
 // Parses a WaniKani RFC 3339 timestamp, e.g.
 // "2026-08-16T03:14:07.000000Z", into a time_point. WaniKani always
 // reports UTC with a literal trailing "Z", so this deliberately does not
