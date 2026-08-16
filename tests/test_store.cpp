@@ -253,3 +253,91 @@ TEST_CASE("upsert_study_material can be called twice for the same subject withou
     CHECK(query_scalar_int(db_path, "SELECT COUNT(*) FROM study_material;") == 1);
     CHECK(query_scalar_int(db_path, "SELECT COUNT(*) FROM study_material WHERE meaning_note = 'note two';") == 1);
 }
+
+TEST_CASE("all_subjects round-trips every field through the JSON columns", "[store]") {
+    const std::string db_path = temp_db_path("all_subjects");
+    std::filesystem::remove(db_path);
+    Store store(db_path);
+
+    Subject subject = make_subject(5, "2026-08-16T00:00:00.000000Z");
+    subject.type = "kanji";
+    subject.characters = "行";
+    subject.meanings = {Meaning{"Go", true, true}, Meaning{"Travel", false, true}};
+    subject.auxiliary_meanings = {AuxiliaryMeaning{"Journey", "whitelist"}};
+    subject.readings = {Reading{"こう", true, true}, Reading{"ぎょう", false, true}};
+    subject.component_subject_ids = {1, 2, 3};
+    subject.visually_similar_subject_ids = {6, 7};
+    subject.meaning_mnemonic = "mm";
+    subject.reading_mnemonic = "rm";
+    store.upsert_subject(subject);
+
+    const std::vector<Subject> all = store.all_subjects();
+
+    REQUIRE(all.size() == 1);
+    const Subject& s = all[0];
+    CHECK(s.id == 5);
+    CHECK(s.type == "kanji");
+    CHECK(s.characters == "行");
+    REQUIRE(s.meanings.size() == 2);
+    CHECK(s.meanings[0].meaning == "Go");
+    CHECK(s.meanings[0].primary == true);
+    CHECK(s.meanings[1].meaning == "Travel");
+    REQUIRE(s.auxiliary_meanings.size() == 1);
+    CHECK(s.auxiliary_meanings[0].meaning == "Journey");
+    REQUIRE(s.readings.size() == 2);
+    CHECK(s.readings[0].reading == "こう");
+    CHECK(s.readings[0].primary == true);
+    CHECK(s.readings[1].primary == false);
+    CHECK(s.component_subject_ids == std::vector<long long>{1, 2, 3});
+    CHECK(s.visually_similar_subject_ids == std::vector<long long>{6, 7});
+    CHECK(s.meaning_mnemonic == "mm");
+    CHECK(s.reading_mnemonic == "rm");
+    CHECK(s.data_updated_at == "2026-08-16T00:00:00.000000Z");
+}
+
+TEST_CASE("replace_similarity_edges round-trips through edges_for and fully replaces on rebuild",
+          "[store]") {
+    const std::string db_path = temp_db_path("similarity_edges");
+    std::filesystem::remove(db_path);
+    Store store(db_path);
+
+    store.replace_similarity_edges({
+        SimilarityEdge{1, 2, EdgeKind::WkVisual, 1.0},
+        SimilarityEdge{1, 3, EdgeKind::Component, 0.5},
+        SimilarityEdge{2, 3, EdgeKind::Meaning, 0.7},
+    });
+
+    const std::vector<SimilarityEdge> for_1 = store.edges_for(1);
+    REQUIRE(for_1.size() == 2);  // (1,2,wk_visual) and (1,3,component)
+
+    const std::vector<SimilarityEdge> for_3 = store.edges_for(3);
+    REQUIRE(for_3.size() == 2);  // (1,3,component) and (2,3,meaning)
+    bool found_component = false;
+    bool found_meaning = false;
+    for (const auto& e : for_3) {
+        if (e.kind == EdgeKind::Component) {
+            CHECK(e.a_id == 1);
+            CHECK(e.b_id == 3);
+            CHECK(e.weight == 0.5);
+            found_component = true;
+        } else if (e.kind == EdgeKind::Meaning) {
+            CHECK(e.a_id == 2);
+            CHECK(e.b_id == 3);
+            CHECK(e.weight == 0.7);
+            found_meaning = true;
+        }
+    }
+    CHECK(found_component);
+    CHECK(found_meaning);
+
+    CHECK(query_scalar_int(db_path, "SELECT COUNT(*) FROM similarity_edge;") == 3);
+
+    // A second rebuild must fully replace the previous set, not append.
+    store.replace_similarity_edges({SimilarityEdge{9, 10, EdgeKind::CharShape, 0.4}});
+
+    CHECK(query_scalar_int(db_path, "SELECT COUNT(*) FROM similarity_edge;") == 1);
+    CHECK(store.edges_for(1).empty());
+    const std::vector<SimilarityEdge> for_9 = store.edges_for(9);
+    REQUIRE(for_9.size() == 1);
+    CHECK(for_9[0].kind == EdgeKind::CharShape);
+}

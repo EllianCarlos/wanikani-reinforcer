@@ -6,6 +6,7 @@
 
 #include "config.h"
 #include "model.h"
+#include "similarity.h"
 #include "store.h"
 #include "wk_api.h"
 
@@ -111,9 +112,25 @@ int run_sync(int session_gap_minutes) {
         // group by the time group_into_sessions returned), so no further
         // per-event UPDATE session is needed here.
 
+        // 6. Similarity graph: a pure function of subject data, so only
+        // worth rebuilding when the subjects sync above actually
+        // inserted/replaced rows this run — an idle `wkr sync` with
+        // nothing new shouldn't pay the rebuild cost every time.
+        int similarity_edge_count = -1;  // -1 means "skipped, nothing changed"
+        if (!subjects.empty()) {
+            const std::vector<Subject> graph_subjects = store.all_subjects();
+            const std::vector<SimilarityEdge> edges = build_similarity_graph(graph_subjects);
+            store.replace_similarity_edges(edges);
+            similarity_edge_count = static_cast<int>(edges.size());
+        }
+
         std::cout << "synced " << subjects.size() << " subjects, " << stats.size() << " stats ("
                   << failure_count << " failures), " << assignments.size() << " assignments, "
-                  << study_materials.size() << " study materials" << std::endl;
+                  << study_materials.size() << " study materials";
+        if (similarity_edge_count >= 0) {
+            std::cout << ", rebuilt similarity graph (" << similarity_edge_count << " edges)";
+        }
+        std::cout << std::endl;
         return 0;
     } catch (const std::exception& e) {
         std::cerr << "error: " << e.what() << std::endl;

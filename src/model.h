@@ -113,6 +113,20 @@ struct Session {
     std::string ended_at;
 };
 
+// One edge in the similarity graph built by similarity.{h,cpp}: subjects
+// `a_id` and `b_id` look alike to a learner along axis `kind`, with
+// `weight` capturing how strong that particular signal is. `a_id` is
+// always < `b_id` so a pair is never stored/emitted twice under the same
+// kind with the endpoints swapped.
+enum class EdgeKind { WkVisual, Component, Reading, Meaning, CharShape };
+
+struct SimilarityEdge {
+    long long a_id;   // always a_id < b_id
+    long long b_id;
+    EdgeKind kind;
+    double weight;
+};
+
 // Parses a WaniKani RFC 3339 timestamp, e.g.
 // "2026-08-16T03:14:07.000000Z", into a time_point. WaniKani always
 // reports UTC with a literal trailing "Z", so this deliberately does not

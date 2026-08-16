@@ -65,6 +65,22 @@ public:
     // Points failure_event.id == failure_event_id at session_id.
     void assign_failure_event_session(long long failure_event_id, long long session_id);
 
+    // Reconstructs every subject row into a Subject, decoding the JSON
+    // columns back into their vector fields. Feeds
+    // build_similarity_graph, which needs the full subject set in memory.
+    std::vector<Subject> all_subjects();
+
+    // Full rebuild of the similarity_edge table: deletes every existing
+    // row and bulk-inserts `edges`, wrapped in one transaction (BEGIN/
+    // COMMIT) since a full subject set can produce thousands of edges.
+    // Matches the plan: "Rebuild the similarity graph if the subject
+    // data changed" — this is a replace, not an incremental diff.
+    void replace_similarity_edges(const std::vector<SimilarityEdge>& edges);
+
+    // Every similarity_edge row touching subject_id, on either side of
+    // the pair (a_id == subject_id OR b_id == subject_id).
+    std::vector<SimilarityEdge> edges_for(long long subject_id);
+
 private:
     sqlite3* db_ = nullptr;
 };
