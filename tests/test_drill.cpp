@@ -354,6 +354,59 @@ TEST_CASE("forced-choice meaning question accepts a distractor that also accepts
     CHECK(std::get<2>(rows[0]) == true);
 }
 
+TEST_CASE("forced-choice meaning question accepts a distractor via its StudyMaterial synonym, not just "
+          "its own accepted-answer meanings",
+          "[drill][regression]") {
+    // Same shape as the "accepts a distractor that also accepts the shown
+    // meaning" test above, except the shared answer lives in a
+    // StudyMaterial synonym rather than being one of the distractor's own
+    // Meaning entries -- the gap this task closes.
+    Subject big;
+    big.id = 31;
+    big.characters = "大";
+    big.slug = "big";
+    big.level = 1;
+    big.meanings = {Meaning{"Big", true, true}};
+
+    Subject fat;
+    fat.id = 32;
+    fat.characters = "太";
+    fat.slug = "fat";
+    fat.level = 1;
+    fat.meanings = {Meaning{"Fat", true, true}};  // no "Big" meaning at all
+
+    Subject dog;
+    dog.id = 33;
+    dog.characters = "犬";
+    dog.slug = "dog";
+    dog.level = 1;
+    dog.meanings = {Meaning{"Dog", true, true}};
+
+    wk_api::StudyMaterial fat_material;
+    fat_material.subject_id = fat.id;
+    fat_material.meaning_synonyms = {"Big"};
+
+    const std::string db_path = temp_db_path("forced_choice_synonym");
+    std::filesystem::remove(db_path);
+    Store store(db_path);
+
+    // Q1 is forced-choice/meaning with no rotation: options [大, 太, 犬],
+    // so 太 is choice 2. The question shows 大's meaning "Big"; 太 only
+    // matches via its synonym.
+    std::istringstream in("2\n");
+    std::ostringstream out;
+    run_drill({make_pair(31, 32)}, {big, fat, dog}, {fat_material}, store, /*question_count=*/1, in, out);
+
+    const std::string output = out.str();
+    CAPTURE(output);
+    CHECK(output.find("Which one means \"Big\"?") != std::string::npos);
+    CHECK(output.find("1/1 correct") != std::string::npos);
+
+    const auto rows = read_drill_results(db_path);
+    REQUIRE(rows.size() == 1);
+    CHECK(std::get<2>(rows[0]) == true);
+}
+
 TEST_CASE("run_drill stops early on EOF mid-drill and prints a partial score", "[drill]") {
     const std::string db_path = temp_db_path("eof");
     std::filesystem::remove(db_path);
