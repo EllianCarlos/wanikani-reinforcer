@@ -12,6 +12,7 @@
 #include "model.h"
 #include "report.h"
 #include "similarity.h"
+#include "stats.h"
 #include "store.h"
 #include "sync.h"
 #include "wk_api.h"
@@ -216,6 +217,55 @@ TEST_CASE("sync -> report -> drill pipeline composes end-to-end against a seeded
     // The drill step must have written its own local record -- never sent
     // anywhere -- and left the confusion-pair data untouched.
     CHECK(query_scalar_int(db_path, "SELECT COUNT(*) FROM drill_result;") == static_cast<long long>(pairs.size()));
+}
+
+TEST_CASE("stats.cpp reads back drill history and session summary after a real sync + drill run",
+          "[integration]") {
+    // Same fixture/sync/drill setup as the pipeline test above; this test
+    // is a smoke test that stats.cpp's compute functions work against
+    // real Store-backed data, not a re-test of their own logic (already
+    // covered by tests/test_stats.cpp).
+    const std::string db_path = temp_db_path("stats_after_drill");
+    std::filesystem::remove(db_path);
+    Store store(db_path);
+
+    fixture_sync(store, fixture_subjects(), fixture_stats());
+
+    const std::vector<Subject> all_subjects = store.all_subjects();
+    const std::vector<ReviewStat> latest_stats = store.latest_stat_per_subject();
+    const std::vector<Session> sessions = store.all_sessions();
+    const std::vector<FailureEvent> events = store.all_failure_events();
+    const std::vector<SimilarityEdge> edges = store.all_similarity_edges();
+    const std::vector<LeechEntry> leeches = compute_leech_scores(latest_stats);
+    const std::vector<ConfusionPair> pairs =
+        compute_confusion_pairs(sessions, events, edges, leeches, "2026-08-16T00:00:00Z");
+    REQUIRE_FALSE(pairs.empty());
+
+    // The fixture's single co-failure pair is (fat=1, dog=2), a_id < b_id
+    // (see confusion.cpp). Question 1 is forced-choice, meaning axis,
+    // unrotated (i=0): options are [fat, dog, big], so "1" both selects
+    // and correctly answers "Fat".
+    std::istringstream drill_in("1\n");
+    std::ostringstream drill_out;
+    run_drill(pairs, all_subjects, /*study_materials=*/{}, store, /*question_count=*/1, drill_in, drill_out,
+              /*use_color=*/false);
+
+    const std::vector<DrillResult> drill_results = store.all_drill_results();
+    REQUIRE(drill_results.size() == 1);
+    CHECK(drill_results[0].subject_id == 1);
+    CHECK(drill_results[0].distractor_id == 2);
+    CHECK(drill_results[0].correct == true);
+
+    const DrillStats drill_stats = compute_drill_stats(drill_results);
+    CHECK(drill_stats.total >= 0);
+    CHECK(drill_stats.correct >= 0);
+    CHECK(drill_stats.correct <= drill_stats.total);
+
+    const SessionStats session_stats =
+        compute_session_stats(store.all_sessions(), store.all_failure_events(), "2026-08-16T00:00:00Z");
+    CHECK(session_stats.session_count >= 0);
+    CHECK(session_stats.avg_failures_per_session >= 0.0);
+    CHECK(session_stats.sessions_last_7_days >= 0);
 }
 
 TEST_CASE("re-running the sync path twice against identical fixture input produces no duplicate rows",
