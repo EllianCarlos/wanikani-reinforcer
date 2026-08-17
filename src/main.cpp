@@ -14,6 +14,7 @@
 #include "drill.h"
 #include "model.h"
 #include "report.h"
+#include "stats.h"
 #include "store.h"
 #include "sync.h"
 #include "wk_api.h"
@@ -141,8 +142,46 @@ int run_drill_command(int question_count) {
     }
 }
 
+// Named distinctly from stats.h's print_stats (which this wraps), same
+// reasoning as run_drill_command/run_report above.
+int run_stats_command() {
+    try {
+        Config config = Config::load();
+        Store store(config.db_path);
+
+        const std::vector<Subject> subjects = store.all_subjects();
+        if (subjects.empty()) {
+            std::cout << "No data yet — run 'wkr sync' first." << std::endl;
+            return 0;
+        }
+
+        const std::vector<DrillResult> drill_results = store.all_drill_results();
+        const DrillStats drill_stats = compute_drill_stats(drill_results);
+        const std::vector<MissedPairCount> missed_pairs = compute_missed_pairs(drill_results, 5);
+
+        const std::vector<Session> sessions = store.all_sessions();
+        const std::vector<FailureEvent> events = store.all_failure_events();
+        const SessionStats session_stats = compute_session_stats(sessions, events, now_iso8601());
+
+        const std::vector<ReviewStat> latest_stats = store.latest_stat_per_subject();
+        const std::vector<LeechEntry> leeches = compute_leech_scores(latest_stats);
+        std::vector<ReviewStat> leech_history;
+        for (const auto& leech : leeches) {
+            const std::vector<ReviewStat> subject_history = store.stat_snapshots_for(leech.subject_id);
+            leech_history.insert(leech_history.end(), subject_history.begin(), subject_history.end());
+        }
+        const std::vector<LeechTrendEntry> trend = compute_leech_trend(leech_history);
+
+        print_stats(drill_stats, missed_pairs, session_stats, trend, subjects, std::cout, stdout_is_tty());
+        return 0;
+    } catch (const std::exception& e) {
+        std::cerr << "error: " << e.what() << std::endl;
+        return 1;
+    }
+}
+
 void print_usage() {
-    std::cerr << "usage: wkr <sync [--session-gap-minutes N]|report|drill [--count N]>" << std::endl;
+    std::cerr << "usage: wkr <sync [--session-gap-minutes N]|report|drill [--count N]|stats>" << std::endl;
 }
 
 constexpr int kDefaultSessionGapMinutes = 45;
@@ -217,6 +256,9 @@ int main(int argc, char** argv) {
             std::cerr << "error: " << e.what() << std::endl;
             return 1;
         }
+    }
+    if (command == "stats") {
+        return run_stats_command();
     }
 
     print_usage();
