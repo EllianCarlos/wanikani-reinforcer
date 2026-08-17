@@ -72,6 +72,7 @@ build is a clean build.
 wkr sync [--session-gap-minutes N]   # pull subjects/stats/assignments from WaniKani, detect failures
 wkr report                           # print your current leeches, confusion pairs, and focus advice
 wkr drill [--count N]                # run an interactive local quiz over your top confusion pairs
+wkr stats                            # print local drill history, session summary, and leech accuracy trend
 ```
 
 - `wkr sync` is the only command that talks to the network. Run it first,
@@ -83,6 +84,11 @@ wkr drill [--count N]                # run an interactive local quiz over your t
   the SQLite database `wkr sync` populated, and they don't need an API
   token configured at all (only `wkr sync` does). `--count` controls how
   many questions `wkr drill` asks; it defaults to 5.
+- `wkr stats` is purely local, like `wkr report`/`wkr drill`. It needs at
+  least one `wkr drill` run for drill-history stats, at least one `wkr
+  sync` for session stats, and at least two separate `wkr sync` runs on
+  different days for a leech's accuracy trend to show anything — each
+  section prints its own honest "nothing yet" line until then.
 - Output is colourized (bold/red for leeches, cyan for focus advice, green
   for correct drill answers, red for incorrect ones) when stdout is an
   interactive terminal, and plain text otherwise (e.g. when piped to a file
