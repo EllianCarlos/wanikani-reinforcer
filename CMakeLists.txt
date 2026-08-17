@@ -24,6 +24,7 @@ add_library(wkr_lib STATIC
     src/advice.cpp
     src/report.cpp
     src/drill.cpp
+    src/stats.cpp
 )
 target_include_directories(wkr_lib PUBLIC src)
 target_link_libraries(wkr_lib PUBLIC
@@ -48,6 +49,7 @@ add_executable(wkr_tests
     tests/test_confusion.cpp
     tests/test_advice.cpp
     tests/test_drill.cpp
+    tests/test_stats.cpp
     tests/test_integration.cpp
 )
 target_link_libraries(wkr_tests PRIVATE wkr_lib Catch2::Catch2WithMain)
