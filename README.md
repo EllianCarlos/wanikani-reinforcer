@@ -72,7 +72,8 @@ build is a clean build.
 wkr sync [--session-gap-minutes N]   # pull subjects/stats/assignments from WaniKani, detect failures
 wkr report                           # print your current leeches, confusion pairs (with local SRS stage), and focus advice
 wkr drill [--count N]                # run an interactive local quiz over the confusion pairs that are due
-wkr burned [--count N]               # review items you have burned on WaniKani, on a long local schedule
+wkr burned [--count N] [--only TYPES] [--exclude TYPES]
+                                     # review items you have burned on WaniKani, on a long local schedule
 wkr stats                            # print local drill history, session summary, and leech accuracy trend
 ```
 
@@ -101,7 +102,11 @@ wkr stats                            # print local drill history, session summar
   matching as `wkr drill`, and keeps its own schedule in the `burned_srs`
   table: a correct answer returns the item after 30d, 60d, 120d and then
   240d (staying there), while a miss brings it back after 1d. Items you
-  have never reviewed here are due immediately. When nothing is due it
+  have never reviewed here are due immediately. `--only` and `--exclude`
+  take a comma-separated list of `radical`, `kanji` and `vocabulary`
+  (which includes kana-only vocabulary) to narrow the review, e.g.
+  `wkr burned --exclude radical,kanji` or `wkr burned --only kanji`; with
+  both, `--exclude` is applied after `--only`. When nothing is due it
   prints when the next review is and exits. It only reads WaniKani data
   that `wkr sync` already stored.
 - `wkr stats` is purely local, like `wkr report`/`wkr drill`. It needs at

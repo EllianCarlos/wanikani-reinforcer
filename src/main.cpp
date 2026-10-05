@@ -6,6 +6,7 @@
 #include <exception>
 #include <iostream>
 #include <optional>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -152,7 +153,7 @@ int run_drill_command(int question_count) {
     }
 }
 
-int run_burned_command(int question_count) {
+int run_burned_command(int question_count, const std::set<std::string>& included_types) {
     try {
         Config config = Config::load();
         Store store(config.db_path);
@@ -167,9 +168,10 @@ int run_burned_command(int question_count) {
         const std::vector<BurnedSrsState> states = store.all_burned_srs();
         const std::string now = now_iso8601();
 
-        const std::vector<long long> due = select_due_burned(assignments, states, now);
+        const std::vector<long long> due = select_due_burned(assignments, states, now, included_types);
         if (due.empty()) {
-            std::cout << burned_nothing_due_message(assignments, states, now) << std::endl;
+            std::cout << burned_nothing_due_message(assignments, states, now, included_types)
+                      << std::endl;
             return 0;
         }
 
@@ -221,7 +223,7 @@ int run_stats_command() {
 }
 
 void print_usage() {
-    std::cerr << "usage: wkr <sync [--session-gap-minutes N]|report|drill [--count N]|burned [--count N]|stats>" << std::endl;
+    std::cerr << "usage: wkr <sync [--session-gap-minutes N]|report|drill [--count N]|burned [--count N] [--only TYPES] [--exclude TYPES]|stats>" << std::endl;
 }
 
 constexpr int kDefaultSessionGapMinutes = 45;
@@ -269,6 +271,18 @@ int parse_drill_count(int argc, char** argv) {
     return kDefaultDrillQuestionCount;
 }
 
+std::string parse_string_flag(int argc, char** argv, const std::string& name) {
+    for (int i = 2; i < argc; ++i) {
+        if (name == argv[i]) {
+            if (i + 1 >= argc) {
+                throw std::runtime_error(name + " requires a value");
+            }
+            return argv[i + 1];
+        }
+    }
+    return "";
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -299,7 +313,10 @@ int main(int argc, char** argv) {
     }
     if (command == "burned") {
         try {
-            return run_burned_command(parse_drill_count(argc, argv));
+            return run_burned_command(
+                parse_drill_count(argc, argv),
+                resolve_burned_types(parse_string_flag(argc, argv, "--only"),
+                                     parse_string_flag(argc, argv, "--exclude")));
         } catch (const std::exception& e) {
             std::cerr << "error: " << e.what() << std::endl;
             return 1;

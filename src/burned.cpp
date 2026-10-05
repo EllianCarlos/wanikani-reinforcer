@@ -2,11 +2,13 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <chrono>
 #include <map>
 #include <optional>
 #include <set>
 #include <sstream>
+#include <stdexcept>
 
 #include "drill.h"
 #include "srs.h"
@@ -40,10 +42,13 @@ std::string now_or_clock(const std::string& now_iso8601) {
     return format_wk_timestamp(std::chrono::system_clock::now());
 }
 
-std::set<long long> burned_subject_ids(const std::vector<Assignment>& assignments) {
+std::set<long long> burned_subject_ids(const std::vector<Assignment>& assignments,
+                                       const std::set<std::string>& included_types) {
     std::set<long long> ids;
     for (const auto& assignment : assignments) {
-        if (assignment.srs_stage == kWkBurnedStage) {
+        const bool type_allowed =
+            included_types.empty() || included_types.count(assignment.subject_type) > 0;
+        if (assignment.srs_stage == kWkBurnedStage && type_allowed) {
             ids.insert(assignment.subject_id);
         }
     }
@@ -56,6 +61,43 @@ std::map<long long, const BurnedSrsState*> index_states(const std::vector<Burned
         index[state.subject_id] = &state;
     }
     return index;
+}
+
+std::string lower_trimmed(const std::string& s) {
+    const size_t begin = s.find_first_not_of(" \t");
+    if (begin == std::string::npos) {
+        return "";
+    }
+    const size_t end = s.find_last_not_of(" \t");
+    std::string out = s.substr(begin, end - begin + 1);
+    for (char& c : out) {
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    }
+    return out;
+}
+
+std::set<std::string> parse_type_list(const std::string& list) {
+    std::set<std::string> types;
+    std::stringstream stream(list);
+    std::string token;
+    while (std::getline(stream, token, ',')) {
+        const std::string name = lower_trimmed(token);
+        if (name.empty()) {
+            continue;
+        }
+        if (name == "radical" || name == "radicals") {
+            types.insert("radical");
+        } else if (name == "kanji") {
+            types.insert("kanji");
+        } else if (name == "vocab" || name == "vocabulary") {
+            types.insert("vocabulary");
+            types.insert("kana_vocabulary");
+        } else {
+            throw std::runtime_error("unknown subject type: " + name +
+                                     " (expected radical, kanji or vocabulary)");
+        }
+    }
+    return types;
 }
 
 std::vector<std::string> accepted_texts(const Subject& subject,
@@ -76,6 +118,20 @@ std::vector<std::string> accepted_texts(const Subject& subject,
 
 }  // namespace
 
+std::set<std::string> resolve_burned_types(const std::string& only, const std::string& exclude) {
+    std::set<std::string> types = parse_type_list(only);
+    if (types.empty()) {
+        types = {"radical", "kanji", "vocabulary", "kana_vocabulary"};
+    }
+    for (const auto& excluded : parse_type_list(exclude)) {
+        types.erase(excluded);
+    }
+    if (types.empty()) {
+        throw std::runtime_error("no subject types left after applying --only/--exclude");
+    }
+    return types;
+}
+
 BurnedSrsState advance_burned_srs(const std::optional<BurnedSrsState>& current, long long subject_id,
                                   bool correct, const std::string& now_iso8601) {
     const int next_stage =
@@ -95,12 +151,13 @@ BurnedSrsState advance_burned_srs(const std::optional<BurnedSrsState>& current, 
 
 std::vector<long long> select_due_burned(const std::vector<Assignment>& assignments,
                                          const std::vector<BurnedSrsState>& states,
-                                         const std::string& now_iso8601) {
+                                         const std::string& now_iso8601,
+                                         const std::set<std::string>& included_types) {
     const auto index = index_states(states);
 
     std::vector<const BurnedSrsState*> overdue;
     std::vector<long long> unseen;
-    for (long long id : burned_subject_ids(assignments)) {
+    for (long long id : burned_subject_ids(assignments, included_types)) {
         const auto it = index.find(id);
         if (it == index.end()) {
             unseen.push_back(id);
@@ -123,10 +180,13 @@ std::vector<long long> select_due_burned(const std::vector<Assignment>& assignme
 
 std::string burned_nothing_due_message(const std::vector<Assignment>& assignments,
                                        const std::vector<BurnedSrsState>& states,
-                                       const std::string& now_iso8601) {
-    const std::set<long long> ids = burned_subject_ids(assignments);
+                                       const std::string& now_iso8601,
+                                       const std::set<std::string>& included_types) {
+    const std::set<long long> ids = burned_subject_ids(assignments, included_types);
     if (ids.empty()) {
-        return "No burned items yet -- keep going on WaniKani.";
+        return included_types.empty()
+                   ? "No burned items yet -- keep going on WaniKani."
+                   : "No burned items of the selected types yet -- keep going on WaniKani.";
     }
 
     const auto index = index_states(states);

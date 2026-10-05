@@ -169,3 +169,51 @@ TEST_CASE("run_burned_review stops at the question count and on EOF without sche
     run_burned_review({2}, subjects, {}, store, 5, eof_in, eof_out, false, kNow);
     CHECK(store.all_burned_srs().size() == 1);
 }
+
+TEST_CASE("select_due_burned honours the included subject types", "[burned]") {
+    Assignment radical = make_assignment(1, 9);
+    radical.subject_type = "radical";
+    Assignment kanji = make_assignment(2, 9);
+    kanji.subject_type = "kanji";
+    Assignment vocab = make_assignment(3, 9);
+    vocab.subject_type = "vocabulary";
+    Assignment kana = make_assignment(4, 9);
+    kana.subject_type = "kana_vocabulary";
+    const std::vector<Assignment> assignments = {radical, kanji, vocab, kana};
+
+    CHECK(select_due_burned(assignments, {}, kNow).size() == 4);
+    CHECK(select_due_burned(assignments, {}, kNow, {"kanji"}) == std::vector<long long>{2});
+    CHECK(select_due_burned(assignments, {}, kNow, {"radical", "vocabulary"}) ==
+          std::vector<long long>{1, 3});
+}
+
+TEST_CASE("burned_nothing_due_message names the type filter when nothing matches", "[burned]") {
+    Assignment kanji = make_assignment(2, 9);
+    kanji.subject_type = "kanji";
+
+    CHECK(burned_nothing_due_message({kanji}, {}, kNow, {"radical"}) ==
+          "No burned items of the selected types yet -- keep going on WaniKani.");
+}
+
+TEST_CASE("resolve_burned_types defaults to every type", "[burned]") {
+    const std::set<std::string> all = resolve_burned_types("", "");
+
+    CHECK(all == std::set<std::string>{"radical", "kanji", "vocabulary", "kana_vocabulary"});
+}
+
+TEST_CASE("resolve_burned_types applies --only and --exclude, with vocab covering kana vocabulary",
+          "[burned]") {
+    CHECK(resolve_burned_types("kanji,radical", "") == std::set<std::string>{"kanji", "radical"});
+    CHECK(resolve_burned_types("", "kanji,radical") ==
+          std::set<std::string>{"vocabulary", "kana_vocabulary"});
+    CHECK(resolve_burned_types("", "vocab") == std::set<std::string>{"radical", "kanji"});
+    CHECK(resolve_burned_types("vocab,kanji", "kanji") ==
+          std::set<std::string>{"vocabulary", "kana_vocabulary"});
+    CHECK(resolve_burned_types(" Kanji , RADICAL ", "") == std::set<std::string>{"kanji", "radical"});
+}
+
+TEST_CASE("resolve_burned_types rejects unknown names and an empty result", "[burned]") {
+    CHECK_THROWS_AS(resolve_burned_types("kanjis", ""), std::runtime_error);
+    CHECK_THROWS_AS(resolve_burned_types("", "grammar"), std::runtime_error);
+    CHECK_THROWS_AS(resolve_burned_types("kanji", "kanji"), std::runtime_error);
+}
