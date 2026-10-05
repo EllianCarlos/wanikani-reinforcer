@@ -23,7 +23,7 @@ grep -rn "CURLOPT_POST\|CUSTOMREQUEST\|CURLOPT_UPLOAD" src/
 ```
 
 That command should always print nothing. It's also run as part of this
-project's own review process. This is why `wkr drill` — which quizzes you
+project's own review process. This is why the drill — which quizzes you
 interactively — never touches your real SRS stages, review queue, or
 streaks: it only ever reads from WaniKani and writes to its own local
 SQLite database.
@@ -59,78 +59,92 @@ SQLite database.
 
 ## Build
 
+The repo is a monorepo: a C++ backend (`backend/`, binary `wkr-core`) and a
+Rust/ratatui terminal UI (`frontend/`, binary `wkr`) that talks to it over
+line-delimited JSON-RPC on the backend's stdio (see `docs/protocol.md`).
+
 ```sh
-cmake -B build && cmake --build build
+cmake -S backend -B backend/build -G Ninja && cmake --build backend/build
+cargo build --release --manifest-path frontend/Cargo.toml
 ```
 
-The build treats warnings as errors (`-Wall -Wextra -Werror`), so a clean
-build is a clean build.
+The backend build treats warnings as errors (`-Wall -Wextra -Werror`). The
+TUI looks for `wkr-core` in `$WKR_CORE`, then next to its own executable,
+then on `PATH`; during development:
+`WKR_CORE=backend/build/wkr-core cargo run --manifest-path frontend/Cargo.toml`.
 
 ## Usage
+
+`wkr` with no arguments opens the full-screen TUI:
+
+| Key | Action |
+|---|---|
+| `d` | drill the confusion pairs that are due |
+| `b` | review items you have burned on WaniKani |
+| `s` | sync with WaniKani |
+| `r` / `j` `k` | refresh / scroll the dashboard |
+| `1`-`9` or type + `Enter` | answer; `Esc` aborts a session; `q` quits |
+
+With arguments, `wkr` passes them to `wkr-core`, so scripts and cron keep
+working:
 
 ```sh
 wkr sync [--session-gap-minutes N]   # pull subjects/stats/assignments from WaniKani, detect failures
 wkr report                           # print your current leeches, confusion pairs (with local SRS stage), and focus advice
-wkr drill [--count N]                # run an interactive local quiz over the confusion pairs that are due
-wkr burned [--count N] [--only TYPES] [--exclude TYPES]
-                                     # review items you have burned on WaniKani, on a long local schedule
 wkr stats                            # print local drill history, session summary, and leech accuracy trend
+wkr serve                            # speak JSON-RPC on stdio (what the TUI runs)
 ```
 
-- `wkr sync` is the only command that talks to the network. Run it first,
+- `sync` is the only command that talks to the network. Run it first,
   and periodically afterwards — the inference gets better with more synced
   sessions over time (see Design notes below). `--session-gap-minutes`
   controls how large a gap between two failures must be before they're
-  treated as separate study sessions; it defaults to 45.
-- `wkr report` and `wkr drill` are both purely local — they only read from
-  the SQLite database `wkr sync` populated, and they don't need an API
-  token configured at all (only `wkr sync` does). `--count` controls how
-  many questions `wkr drill` asks; it defaults to 5.
-- `wkr drill` schedules each confusion pair with its own local
+  treated as separate study sessions; it defaults to 45. In the TUI, `s`
+  does the same.
+- The drill and burned review are purely local — they only read from
+  the SQLite database `sync` populated, and they don't need an API
+  token configured at all (only `sync` does). Each session asks 5 questions.
+- The drill schedules each confusion pair with its own local
   spaced-repetition stage (stored in the `pair_srs` table; it never touches
   your WaniKani SRS). A pair you have just drilled is not asked again until
-  it is due, and when nothing is due the command prints when the next
-  review is and exits without asking anything. Stages 1 to 8 come back
+  it is due, and when nothing is due the TUI says when the next
+  review is. Stages 1 to 8 come back
   after 4h, 8h, 1d, 2d, 7d, 14d, 30d and 120d; a correct answer moves up
   one stage, an incorrect one drops two (never below stage 1), and a
   correct answer on stage 8 burns the pair, which is then never asked
   again. `wkr report` shows each look-alike's stage, e.g. `[new]`,
   `[stage 3, due in 2d]` or `[burned]`.
-- `wkr burned` is an extra review of subjects WaniKani reports as burned
-  (SRS stage 9), which WaniKani itself never shows again. It reviews
-  up to `--count` (default 5) of them. Each item is asked its meaning
-  first (same answer matching as `wkr drill`) and then, for kanji and
-  vocabulary, its reading, always in that order and one item at a time.
-  Readings can be typed in hiragana, katakana or romaji (`inu`, `nihon`,
-  `gakkou`). Every prompt is tagged `[Radical]`, `[Kanji]` or
-  `[Vocabulary]`, since the same characters can exist as all three. If you
-  type a real reading that WaniKani doesn't accept for that subject (e.g.
-  こ for the kanji 子), you get a hint and the same question again, not a
-  miss. An item only counts as correct when both answers are right.
-  It keeps its own schedule in the `burned_srs` table: a correct answer
-  returns the item after 30d, 60d, 120d and then 240d (staying there),
-  while a miss brings it back after 1d. Items you
-  have never reviewed here are due immediately. `--only` and `--exclude`
-  take a comma-separated list of `radical`, `kanji` and `vocabulary`
-  (which includes kana-only vocabulary) to narrow the review, e.g.
-  `wkr burned --exclude radical,kanji` or `wkr burned --only kanji`; with
-  both, `--exclude` is applied after `--only`. When nothing is due it
-  prints when the next review is and exits. It only reads WaniKani data
-  that `wkr sync` already stored.
-- `wkr stats` is purely local, like `wkr report`/`wkr drill`. It needs at
-  least one `wkr drill` run for drill-history stats, at least one `wkr
-  sync` for session stats, and at least two separate `wkr sync` runs on
-  different days for a leech's accuracy trend to show anything — each
-  section prints its own honest "nothing yet" line until then.
-- Output is colourized (bold/red for leeches, cyan for focus advice, green
-  for correct drill answers, red for incorrect ones) when stdout is an
-  interactive terminal, and plain text otherwise (e.g. when piped to a file
-  or another program).
+- The burned review covers subjects WaniKani reports as burned
+  (SRS stage 9), which WaniKani itself never shows again. Each item is
+  asked its meaning first (same answer matching as the drill) and then,
+  for kanji and vocabulary, its reading, always in that order and one item
+  at a time. Readings can be typed in hiragana, katakana or romaji (`inu`,
+  `nihon`, `gakkou`); the TUI previews the kana as you type. Every prompt
+  is tagged `[Radical]`, `[Kanji]` or `[Vocabulary]`, since the same
+  characters can exist as all three. If you type a real reading that
+  WaniKani doesn't accept for that subject (e.g. こ for the kanji 子), you
+  get a hint and the same question again, not a miss. An item only counts
+  as correct when both answers are right. It keeps its own schedule in the
+  `burned_srs` table: a correct answer returns the item after 30d, 60d,
+  120d and then 240d (staying there), while a miss brings it back after 1d.
+  Items you have never reviewed here are due immediately. The
+  `session.start` RPC accepts `only`/`exclude` type filters
+  (`radical`, `kanji`, `vocabulary`, the last including kana-only
+  vocabulary); `exclude` is applied after `only`.
+- `stats` is purely local, like `report`. It needs at least one drill for
+  drill-history stats, at least one `sync` for session stats, and at least
+  two separate syncs on different days for a leech's accuracy trend to show
+  anything — each section prints its own honest "nothing yet" line until
+  then. The TUI dashboard shows the same sections.
+- CLI output is colourized (bold/red for leeches, cyan for focus advice)
+  when stdout is an interactive terminal, and plain text otherwise (e.g.
+  when piped to a file or another program).
 
 ## Testing
 
 ```sh
-ctest --test-dir build
+ctest --test-dir backend/build        # or backend/build/wkr_tests
+cargo test --manifest-path frontend/Cargo.toml
 ```
 
 All tests are local and unit/integration-level — none require a live
@@ -163,7 +177,7 @@ next `wkr sync`).
 Honest limits: real co-failure pairs need several sessions of `wkr sync`
 polling to accumulate, since they depend on two subjects actually being
 missed close together in time across multiple reviews. On a fresh sync
-(or a low-review-history account), most of what `wkr report`/`wkr drill`
+(or a low-review-history account), most of what `wkr report` and the drill
 surfaces will be single-leech "likely" candidates and cold-start detections
 (`current_streak == 0` on the very first snapshot wkr has seen for a
 subject) rather than confirmed co-failures — still useful, just less

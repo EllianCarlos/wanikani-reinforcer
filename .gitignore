@@ -1,5 +1,7 @@
 # Build artifacts
 build/
+backend/build/
+frontend/target/
 *.o
 *.a
 *.so

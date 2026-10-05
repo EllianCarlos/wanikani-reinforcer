@@ -21,6 +21,11 @@
           pkgs.nlohmann_json
           pkgs.catch2_3
           pkgs.gcc
+          pkgs.cargo
+          pkgs.rustc
+          pkgs.clippy
+          pkgs.rustfmt
+          pkgs.rust-analyzer
         ];
       };
     };
