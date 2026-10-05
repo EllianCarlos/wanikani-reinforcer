@@ -143,6 +143,12 @@ public:
     // Every pair_srs row, ordered by (a_id, b_id).
     std::vector<PairSrsState> all_pair_srs();
 
+    // Inserts or replaces the burned_srs row for state.subject_id.
+    void upsert_burned_srs(const BurnedSrsState& state);
+
+    // Every burned_srs row, ordered by subject_id.
+    std::vector<BurnedSrsState> all_burned_srs();
+
     // Every stat_snapshot row for `subject_id`, ordered by
     // data_updated_at ascending -- the full history
     // Store::latest_stat_per_subject discards down to one row per

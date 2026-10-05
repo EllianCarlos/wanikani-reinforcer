@@ -554,3 +554,29 @@ TEST_CASE("upsert_pair_srs treats (5, 2) and (2, 5) as the same pair", "[store]"
     CHECK(states[0].b_id == 5);
     CHECK(states[0].stage == 3);
 }
+
+TEST_CASE("all_burned_srs is empty on a fresh store", "[store]") {
+    const std::string db_path = temp_db_path("burned_srs_empty");
+    std::filesystem::remove(db_path);
+    Store store(db_path);
+
+    REQUIRE(store.all_burned_srs().empty());
+}
+
+TEST_CASE("upsert_burned_srs round-trips and replaces the row on a second upsert", "[store]") {
+    const std::string db_path = temp_db_path("burned_srs_upsert");
+    std::filesystem::remove(db_path);
+    Store store(db_path);
+
+    store.upsert_burned_srs(BurnedSrsState{7, 1, "2026-09-15T00:00:00Z", "2026-08-16T00:00:00Z"});
+    store.upsert_burned_srs(BurnedSrsState{7, 2, "2026-11-14T00:00:00Z", "2026-09-15T00:00:00Z"});
+    store.upsert_burned_srs(BurnedSrsState{3, 0, "2026-09-16T00:00:00Z", "2026-09-15T00:00:00Z"});
+
+    const std::vector<BurnedSrsState> states = store.all_burned_srs();
+    REQUIRE(states.size() == 2);
+    CHECK(states[0].subject_id == 3);
+    CHECK(states[1].subject_id == 7);
+    CHECK(states[1].stage == 2);
+    CHECK(states[1].due_at == "2026-11-14T00:00:00Z");
+    CHECK(states[1].last_reviewed_at == "2026-09-15T00:00:00Z");
+}

@@ -98,6 +98,9 @@ CREATE TABLE IF NOT EXISTS pair_srs (
   a_id INTEGER, b_id INTEGER, stage INTEGER, due_at TEXT, last_reviewed_at TEXT,
   PRIMARY KEY (a_id, b_id));
 
+CREATE TABLE IF NOT EXISTS burned_srs (
+  subject_id INTEGER PRIMARY KEY, stage INTEGER, due_at TEXT, last_reviewed_at TEXT);
+
 CREATE TABLE IF NOT EXISTS sync_meta (key TEXT PRIMARY KEY, value TEXT);
 )SQL";
 
@@ -1017,6 +1020,61 @@ std::vector<PairSrsState> Store::all_pair_srs() {
         const std::string message = sqlite3_errmsg(db_);
         sqlite3_finalize(stmt);
         throw std::runtime_error("all_pair_srs failed: " + message);
+    }
+    sqlite3_finalize(stmt);
+    return states;
+}
+
+void Store::upsert_burned_srs(const BurnedSrsState& state) {
+    static const char* sql =
+        "INSERT OR REPLACE INTO burned_srs (subject_id, stage, due_at, last_reviewed_at) "
+        "VALUES (?, ?, ?, ?);";
+
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+        throw std::runtime_error(std::string("prepare upsert_burned_srs failed: ") +
+                                  sqlite3_errmsg(db_));
+    }
+
+    sqlite3_bind_int64(stmt, 1, state.subject_id);
+    sqlite3_bind_int(stmt, 2, state.stage);
+    sqlite3_bind_text(stmt, 3, state.due_at.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 4, state.last_reviewed_at.c_str(), -1, SQLITE_TRANSIENT);
+
+    const int rc = sqlite3_step(stmt);
+    if (rc != SQLITE_DONE) {
+        const std::string message = sqlite3_errmsg(db_);
+        sqlite3_finalize(stmt);
+        throw std::runtime_error("upsert_burned_srs failed: " + message);
+    }
+    sqlite3_finalize(stmt);
+}
+
+std::vector<BurnedSrsState> Store::all_burned_srs() {
+    static const char* sql =
+        "SELECT subject_id, stage, due_at, last_reviewed_at FROM burned_srs ORDER BY subject_id;";
+
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+        throw std::runtime_error(std::string("prepare all_burned_srs failed: ") + sqlite3_errmsg(db_));
+    }
+
+    std::vector<BurnedSrsState> states;
+    int rc;
+    while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+        BurnedSrsState state;
+        state.subject_id = sqlite3_column_int64(stmt, 0);
+        state.stage = sqlite3_column_int(stmt, 1);
+        const unsigned char* due = sqlite3_column_text(stmt, 2);
+        state.due_at = due != nullptr ? reinterpret_cast<const char*>(due) : "";
+        const unsigned char* reviewed = sqlite3_column_text(stmt, 3);
+        state.last_reviewed_at = reviewed != nullptr ? reinterpret_cast<const char*>(reviewed) : "";
+        states.push_back(std::move(state));
+    }
+    if (rc != SQLITE_DONE) {
+        const std::string message = sqlite3_errmsg(db_);
+        sqlite3_finalize(stmt);
+        throw std::runtime_error("all_burned_srs failed: " + message);
     }
     sqlite3_finalize(stmt);
     return states;
