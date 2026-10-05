@@ -26,6 +26,7 @@ add_library(wkr_lib STATIC
     src/drill.cpp
     src/stats.cpp
     src/srs.cpp
+    src/burned.cpp
 )
 target_include_directories(wkr_lib PUBLIC src)
 target_link_libraries(wkr_lib PUBLIC
@@ -52,6 +53,7 @@ add_executable(wkr_tests
     tests/test_drill.cpp
     tests/test_stats.cpp
     tests/test_srs.cpp
+    tests/test_burned.cpp
     tests/test_integration.cpp
 )
 target_link_libraries(wkr_tests PRIVATE wkr_lib Catch2::Catch2WithMain)
