@@ -9,6 +9,7 @@
 #include <string>
 #include <vector>
 
+#include "burned.h"
 #include "config.h"
 #include "confusion.h"
 #include "drill.h"
@@ -151,6 +152,36 @@ int run_drill_command(int question_count) {
     }
 }
 
+int run_burned_command(int question_count) {
+    try {
+        Config config = Config::load();
+        Store store(config.db_path);
+
+        const std::vector<Subject> subjects = store.all_subjects();
+        if (subjects.empty()) {
+            std::cout << "No data yet — run 'wkr sync' first." << std::endl;
+            return 0;
+        }
+
+        const std::vector<Assignment> assignments = store.all_assignments();
+        const std::vector<BurnedSrsState> states = store.all_burned_srs();
+        const std::string now = now_iso8601();
+
+        const std::vector<long long> due = select_due_burned(assignments, states, now);
+        if (due.empty()) {
+            std::cout << burned_nothing_due_message(assignments, states, now) << std::endl;
+            return 0;
+        }
+
+        run_burned_review(due, subjects, store.all_study_materials(), store, question_count, std::cin,
+                          std::cout, stdout_is_tty(), now);
+        return 0;
+    } catch (const std::exception& e) {
+        std::cerr << "error: " << e.what() << std::endl;
+        return 1;
+    }
+}
+
 // Named distinctly from stats.h's print_stats (which this wraps), same
 // reasoning as run_drill_command/run_report above.
 int run_stats_command() {
@@ -190,7 +221,7 @@ int run_stats_command() {
 }
 
 void print_usage() {
-    std::cerr << "usage: wkr <sync [--session-gap-minutes N]|report|drill [--count N]|stats>" << std::endl;
+    std::cerr << "usage: wkr <sync [--session-gap-minutes N]|report|drill [--count N]|burned [--count N]|stats>" << std::endl;
 }
 
 constexpr int kDefaultSessionGapMinutes = 45;
@@ -261,6 +292,14 @@ int main(int argc, char** argv) {
     if (command == "drill") {
         try {
             return run_drill_command(parse_drill_count(argc, argv));
+        } catch (const std::exception& e) {
+            std::cerr << "error: " << e.what() << std::endl;
+            return 1;
+        }
+    }
+    if (command == "burned") {
+        try {
+            return run_burned_command(parse_drill_count(argc, argv));
         } catch (const std::exception& e) {
             std::cerr << "error: " << e.what() << std::endl;
             return 1;

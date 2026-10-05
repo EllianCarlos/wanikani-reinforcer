@@ -72,6 +72,7 @@ build is a clean build.
 wkr sync [--session-gap-minutes N]   # pull subjects/stats/assignments from WaniKani, detect failures
 wkr report                           # print your current leeches, confusion pairs (with local SRS stage), and focus advice
 wkr drill [--count N]                # run an interactive local quiz over the confusion pairs that are due
+wkr burned [--count N]               # review items you have burned on WaniKani, on a long local schedule
 wkr stats                            # print local drill history, session summary, and leech accuracy trend
 ```
 
@@ -94,6 +95,15 @@ wkr stats                            # print local drill history, session summar
   correct answer on stage 8 burns the pair, which is then never asked
   again. `wkr report` shows each look-alike's stage, e.g. `[new]`,
   `[stage 3, due in 2d]` or `[burned]`.
+- `wkr burned` is an extra review of subjects WaniKani reports as burned
+  (SRS stage 9), which WaniKani itself never shows again. It asks the
+  meaning of up to `--count` (default 5) of them, using the same answer
+  matching as `wkr drill`, and keeps its own schedule in the `burned_srs`
+  table: a correct answer returns the item after 30d, 60d, 120d and then
+  240d (staying there), while a miss brings it back after 1d. Items you
+  have never reviewed here are due immediately. When nothing is due it
+  prints when the next review is and exits. It only reads WaniKani data
+  that `wkr sync` already stored.
 - `wkr stats` is purely local, like `wkr report`/`wkr drill`. It needs at
   least one `wkr drill` run for drill-history stats, at least one `wkr
   sync` for session stats, and at least two separate `wkr sync` runs on
