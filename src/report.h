@@ -36,4 +36,5 @@ void print_report(const std::vector<ConfusionPair>& pairs, const std::vector<Lee
                    const std::vector<Assignment>& all_assignments,
                    const std::vector<wk_api::StudyMaterial>& all_study_materials,
                    const std::vector<ReviewStat>& latest_stats, std::ostream& out,
-                   bool use_color = false);
+                   bool use_color = false, const std::vector<PairSrsState>& pair_srs = {},
+                   const std::string& now_iso8601 = "");

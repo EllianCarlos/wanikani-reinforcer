@@ -95,7 +95,7 @@ int run_report() {
             compute_confusion_pairs(sessions, events, edges, leeches, now_iso8601());
 
         print_report(pairs, leeches, subjects, assignments, study_materials, latest_stats, std::cout,
-                     stdout_is_tty());
+                     stdout_is_tty(), store.all_pair_srs(), now_iso8601());
         return 0;
     } catch (const std::exception& e) {
         std::cerr << "error: " << e.what() << std::endl;

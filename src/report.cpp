@@ -6,6 +6,7 @@
 #include <sstream>
 
 #include "advice.h"
+#include "srs.h"
 #include "width.h"
 
 namespace {
@@ -109,15 +110,32 @@ std::string primary_meaning_text(const Subject& subject) {
 // Prints up to kMaxShown neighbors from `list` (already sorted
 // descending by score) as a column-aligned "chars meaning" line,
 // indented 4 spaces, e.g. "    大 big    犬 dog".
+std::string srs_label(long long a_id, long long b_id, const std::vector<PairSrsState>& pair_srs,
+                      const std::string& now_iso8601) {
+    const long long lo = std::min(a_id, b_id);
+    const long long hi = std::max(a_id, b_id);
+    std::optional<PairSrsState> found;
+    for (const auto& state : pair_srs) {
+        if (state.a_id == lo && state.b_id == hi) {
+            found = state;
+            break;
+        }
+    }
+    return "[" + describe_pair_srs(found, now_iso8601) + "]";
+}
+
 void print_neighbor_list(std::ostream& out, const std::vector<const ConfusionPair*>& list,
-                          long long leech_id, const std::map<long long, const Subject*>& subject_by_id) {
+                          long long leech_id, const std::map<long long, const Subject*>& subject_by_id,
+                          const std::vector<PairSrsState>& pair_srs, const std::string& now_iso8601) {
     constexpr size_t kMaxShown = 4;
     std::vector<const Subject*> neighbors;
+    std::vector<std::string> labels;
     for (size_t i = 0; i < list.size() && i < kMaxShown; ++i) {
         const long long neighbor_id = (list[i]->a_id == leech_id) ? list[i]->b_id : list[i]->a_id;
         const auto it = subject_by_id.find(neighbor_id);
         if (it != subject_by_id.end()) {
             neighbors.push_back(it->second);
+            labels.push_back(srs_label(leech_id, neighbor_id, pair_srs, now_iso8601));
         }
     }
     if (neighbors.empty()) {
@@ -135,7 +153,7 @@ void print_neighbor_list(std::ostream& out, const std::vector<const ConfusionPai
             out << "  ";
         }
         out << " " << pad_to_width(display_name(*neighbors[i]), max_width) << " "
-            << primary_meaning_text(*neighbors[i]);
+            << primary_meaning_text(*neighbors[i]) << " " << labels[i];
     }
     out << "\n";
 }
@@ -156,7 +174,8 @@ void print_report(const std::vector<ConfusionPair>& pairs, const std::vector<Lee
                    const std::vector<Subject>& all_subjects,
                    const std::vector<Assignment>& all_assignments,
                    const std::vector<wk_api::StudyMaterial>& all_study_materials,
-                   const std::vector<ReviewStat>& latest_stats, std::ostream& out, bool use_color) {
+                   const std::vector<ReviewStat>& latest_stats, std::ostream& out, bool use_color,
+                   const std::vector<PairSrsState>& pair_srs, const std::string& now_iso8601) {
     if (leeches.empty()) {
         out << "No leeches found yet. Keep reviewing and run 'wkr sync' again.\n";
         return;
@@ -225,10 +244,10 @@ void print_report(const std::vector<ConfusionPair>& pairs, const std::vector<Lee
 
         if (!co_failure.empty()) {
             out << "  Look-alikes you also failed today:\n";
-            print_neighbor_list(out, co_failure, leech.subject_id, subject_by_id);
+            print_neighbor_list(out, co_failure, leech.subject_id, subject_by_id, pair_srs, now_iso8601);
         } else if (!likely_list.empty()) {
             out << "  Likely confused with:\n";
-            print_neighbor_list(out, likely_list, leech.subject_id, subject_by_id);
+            print_neighbor_list(out, likely_list, leech.subject_id, subject_by_id, pair_srs, now_iso8601);
         }
 
         // `pairs` (and therefore `relevant`, built by a single forward

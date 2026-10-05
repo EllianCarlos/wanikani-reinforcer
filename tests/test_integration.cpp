@@ -374,3 +374,35 @@ TEST_CASE("a second drill over the same pairs finds nothing due until the SRS in
           "Nothing due. Next review in 4h.");
     CHECK(select_due_pairs(pairs, states, "2026-08-16T04:00:00Z").size() == pairs.size());
 }
+
+TEST_CASE("report annotates each look-alike with its local SRS state", "[integration][srs]") {
+    const std::string db_path = temp_db_path("srs_report");
+    std::filesystem::remove(db_path);
+    Store store(db_path);
+
+    fixture_sync(store, fixture_subjects(), fixture_stats());
+
+    const std::vector<Subject> all_subjects = store.all_subjects();
+    const std::vector<ReviewStat> latest_stats = store.latest_stat_per_subject();
+    const std::vector<LeechEntry> leeches = compute_leech_scores(latest_stats);
+    const std::vector<ConfusionPair> pairs =
+        compute_confusion_pairs(store.all_sessions(), store.all_failure_events(),
+                                store.all_similarity_edges(), leeches, "2026-08-16T00:00:00Z");
+    REQUIRE_FALSE(pairs.empty());
+
+    const std::string now = "2026-08-16T00:00:00Z";
+
+    std::ostringstream before;
+    print_report(pairs, leeches, all_subjects, {}, {}, latest_stats, before, false,
+                 store.all_pair_srs(), now);
+    CHECK(before.str().find("[new]") != std::string::npos);
+
+    std::istringstream drill_in("1\n");
+    std::ostringstream drill_out;
+    run_drill(pairs, all_subjects, {}, store, 1, drill_in, drill_out, false, now);
+
+    std::ostringstream after;
+    print_report(pairs, leeches, all_subjects, {}, {}, latest_stats, after, false,
+                 store.all_pair_srs(), now);
+    CHECK(after.str().find("[stage 1, due in 4h]") != std::string::npos);
+}
