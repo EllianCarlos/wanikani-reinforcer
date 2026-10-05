@@ -136,6 +136,13 @@ public:
     // order, like stats.cpp's compute_drill_stats, sort their own copy).
     std::vector<DrillResult> all_drill_results();
 
+    // Inserts or replaces the pair_srs row for the unordered pair
+    // (state.a_id, state.b_id); the key is normalised so a_id < b_id.
+    void upsert_pair_srs(const PairSrsState& state);
+
+    // Every pair_srs row, ordered by (a_id, b_id).
+    std::vector<PairSrsState> all_pair_srs();
+
     // Every stat_snapshot row for `subject_id`, ordered by
     // data_updated_at ascending -- the full history
     // Store::latest_stat_per_subject discards down to one row per

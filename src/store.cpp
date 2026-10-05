@@ -4,6 +4,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstdio>
@@ -92,6 +93,10 @@ CREATE TABLE IF NOT EXISTS similarity_edge (
 CREATE TABLE IF NOT EXISTS drill_result (
   id INTEGER PRIMARY KEY, subject_id INTEGER, distractor_id INTEGER,
   correct INTEGER, answered_at TEXT);
+
+CREATE TABLE IF NOT EXISTS pair_srs (
+  a_id INTEGER, b_id INTEGER, stage INTEGER, due_at TEXT, last_reviewed_at TEXT,
+  PRIMARY KEY (a_id, b_id));
 
 CREATE TABLE IF NOT EXISTS sync_meta (key TEXT PRIMARY KEY, value TEXT);
 )SQL";
@@ -958,6 +963,63 @@ std::vector<DrillResult> Store::all_drill_results() {
     }
     sqlite3_finalize(stmt);
     return results;
+}
+
+void Store::upsert_pair_srs(const PairSrsState& state) {
+    static const char* sql =
+        "INSERT OR REPLACE INTO pair_srs (a_id, b_id, stage, due_at, last_reviewed_at) "
+        "VALUES (?, ?, ?, ?, ?);";
+
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+        throw std::runtime_error(std::string("prepare upsert_pair_srs failed: ") +
+                                  sqlite3_errmsg(db_));
+    }
+
+    sqlite3_bind_int64(stmt, 1, std::min(state.a_id, state.b_id));
+    sqlite3_bind_int64(stmt, 2, std::max(state.a_id, state.b_id));
+    sqlite3_bind_int(stmt, 3, state.stage);
+    sqlite3_bind_text(stmt, 4, state.due_at.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 5, state.last_reviewed_at.c_str(), -1, SQLITE_TRANSIENT);
+
+    const int rc = sqlite3_step(stmt);
+    if (rc != SQLITE_DONE) {
+        const std::string message = sqlite3_errmsg(db_);
+        sqlite3_finalize(stmt);
+        throw std::runtime_error("upsert_pair_srs failed: " + message);
+    }
+    sqlite3_finalize(stmt);
+}
+
+std::vector<PairSrsState> Store::all_pair_srs() {
+    static const char* sql =
+        "SELECT a_id, b_id, stage, due_at, last_reviewed_at FROM pair_srs ORDER BY a_id, b_id;";
+
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+        throw std::runtime_error(std::string("prepare all_pair_srs failed: ") + sqlite3_errmsg(db_));
+    }
+
+    std::vector<PairSrsState> states;
+    int rc;
+    while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+        PairSrsState state;
+        state.a_id = sqlite3_column_int64(stmt, 0);
+        state.b_id = sqlite3_column_int64(stmt, 1);
+        state.stage = sqlite3_column_int(stmt, 2);
+        const unsigned char* due = sqlite3_column_text(stmt, 3);
+        state.due_at = due != nullptr ? reinterpret_cast<const char*>(due) : "";
+        const unsigned char* reviewed = sqlite3_column_text(stmt, 4);
+        state.last_reviewed_at = reviewed != nullptr ? reinterpret_cast<const char*>(reviewed) : "";
+        states.push_back(std::move(state));
+    }
+    if (rc != SQLITE_DONE) {
+        const std::string message = sqlite3_errmsg(db_);
+        sqlite3_finalize(stmt);
+        throw std::runtime_error("all_pair_srs failed: " + message);
+    }
+    sqlite3_finalize(stmt);
+    return states;
 }
 
 std::vector<ReviewStat> Store::stat_snapshots_for(long long subject_id) {

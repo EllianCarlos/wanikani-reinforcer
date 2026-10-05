@@ -514,3 +514,43 @@ TEST_CASE("stat_snapshots_for returns empty for a subject with no snapshots", "[
 
     CHECK(store.stat_snapshots_for(999).empty());
 }
+
+TEST_CASE("all_pair_srs is empty on a fresh store", "[store]") {
+    const std::string db_path = temp_db_path("pair_srs_empty");
+    std::filesystem::remove(db_path);
+    Store store(db_path);
+
+    REQUIRE(store.all_pair_srs().empty());
+}
+
+TEST_CASE("upsert_pair_srs round-trips and replaces the row on a second upsert", "[store]") {
+    const std::string db_path = temp_db_path("pair_srs_upsert");
+    std::filesystem::remove(db_path);
+    Store store(db_path);
+
+    store.upsert_pair_srs(PairSrsState{1, 2, 1, "2026-08-16T04:00:00Z", "2026-08-16T00:00:00Z"});
+    store.upsert_pair_srs(PairSrsState{1, 2, 2, "2026-08-16T12:00:00Z", "2026-08-16T04:00:00Z"});
+
+    const std::vector<PairSrsState> states = store.all_pair_srs();
+    REQUIRE(states.size() == 1);
+    CHECK(states[0].a_id == 1);
+    CHECK(states[0].b_id == 2);
+    CHECK(states[0].stage == 2);
+    CHECK(states[0].due_at == "2026-08-16T12:00:00Z");
+    CHECK(states[0].last_reviewed_at == "2026-08-16T04:00:00Z");
+}
+
+TEST_CASE("upsert_pair_srs treats (5, 2) and (2, 5) as the same pair", "[store]") {
+    const std::string db_path = temp_db_path("pair_srs_unordered");
+    std::filesystem::remove(db_path);
+    Store store(db_path);
+
+    store.upsert_pair_srs(PairSrsState{5, 2, 1, "2026-08-16T04:00:00Z", "2026-08-16T00:00:00Z"});
+    store.upsert_pair_srs(PairSrsState{2, 5, 3, "2026-08-17T00:00:00Z", "2026-08-16T04:00:00Z"});
+
+    const std::vector<PairSrsState> states = store.all_pair_srs();
+    REQUIRE(states.size() == 1);
+    CHECK(states[0].a_id == 2);
+    CHECK(states[0].b_id == 5);
+    CHECK(states[0].stage == 3);
+}

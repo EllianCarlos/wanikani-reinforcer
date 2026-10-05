@@ -165,6 +165,14 @@ struct DrillResult {
     std::string answered_at;
 };
 
+struct PairSrsState {
+    long long a_id = 0;
+    long long b_id = 0;
+    int stage = 0;
+    std::string due_at;
+    std::string last_reviewed_at;
+};
+
 // Aggregate drill_result-table stats, produced by stats.{h,cpp}'s
 // compute_drill_stats. `total`/`correct` cover every recorded
 // drill_result row; `current_streak` counts consecutive correct answers
