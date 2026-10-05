@@ -16,21 +16,10 @@
 
 namespace {
 
-constexpr const char* kColorReset = "\033[0m";
-constexpr const char* kColorGreen = "\033[32m";
-constexpr const char* kColorRed = "\033[31m";
-
 constexpr std::array<std::chrono::hours, kMaxBurnedStage + 1> kStageIntervals = {
     std::chrono::hours(24),      std::chrono::hours(24 * 30),  std::chrono::hours(24 * 60),
     std::chrono::hours(24 * 120), std::chrono::hours(24 * 240),
 };
-
-std::string colorize(const std::string& text, const char* code, bool use_color) {
-    if (!use_color || text.empty()) {
-        return text;
-    }
-    return std::string(code) + text + kColorReset;
-}
 
 std::string display_name(const Subject& subject) {
     return subject.characters.empty() ? subject.slug : subject.characters;
@@ -256,112 +245,115 @@ std::string burned_nothing_due_message(const std::vector<Assignment>& assignment
     return "Nothing due. Next burned review in " + format_wait(*earliest, now_iso8601) + ".";
 }
 
-void run_burned_review(const std::vector<long long>& subject_ids, const std::vector<Subject>& all_subjects,
-                       const std::vector<wk_api::StudyMaterial>& study_materials, Store& store,
-                       int question_count, std::istream& in, std::ostream& out, bool use_color,
-                       const std::string& now_iso8601) {
-    if (subject_ids.empty() || question_count <= 0) {
-        out << "Nothing to review yet.\n";
-        return;
-    }
-
-    std::map<long long, const Subject*> subject_by_id;
+BurnedSession::BurnedSession(std::vector<long long> subject_ids, const std::vector<Subject>& all_subjects,
+                             const std::vector<wk_api::StudyMaterial>& study_materials, Store& store,
+                             int question_count, std::string now_iso8601)
+    : subject_ids_(std::move(subject_ids)),
+      store_(store),
+      question_count_(question_count),
+      now_(std::move(now_iso8601)) {
     for (const auto& subject : all_subjects) {
-        subject_by_id[subject.id] = &subject;
+        subject_by_id_[subject.id] = &subject;
     }
-    std::map<long long, const wk_api::StudyMaterial*> material_by_id;
     for (const auto& material : study_materials) {
-        material_by_id[material.subject_id] = &material;
+        material_by_id_[material.subject_id] = &material;
     }
-    std::map<long long, BurnedSrsState> state_by_id;
-    for (const auto& state : store.all_burned_srs()) {
-        state_by_id[state.subject_id] = state;
+    for (const auto& state : store_.all_burned_srs()) {
+        state_by_id_[state.subject_id] = state;
     }
+}
 
-    int asked = 0;
-    int correct_count = 0;
-    for (long long id : subject_ids) {
-        if (asked >= question_count) {
+std::optional<BurnedQuestion> BurnedSession::next() {
+    if (!current_) {
+        while (cursor_ < subject_ids_.size() && asked_ < question_count_) {
+            const long long id = subject_ids_[cursor_++];
+            const auto it = subject_by_id_.find(id);
+            if (it == subject_by_id_.end()) {
+                continue;
+            }
+            current_ = it->second;
+            phase_ = Phase::Meaning;
+            meaning_correct_ = false;
             break;
         }
-        const auto subject_it = subject_by_id.find(id);
-        if (subject_it == subject_by_id.end()) {
-            continue;
+        if (!current_) {
+            return std::nullopt;
         }
-        const Subject& subject = *subject_it->second;
+    }
 
+    const Subject& subject = *current_;
+    BurnedQuestion q;
+    q.subject_id = subject.id;
+    q.characters = display_name(subject);
+    q.type_label = type_label(subject);
+    q.is_reading = (phase_ == Phase::Reading);
+    q.prompt = "[" + q.type_label + "] " +
+               (q.is_reading ? "What is the reading of \"" : "What does \"") + q.characters +
+               (q.is_reading ? "\"?" : "\" mean?");
+    return q;
+}
+
+BurnedFeedback BurnedSession::answer(const std::string& line) {
+    if (!current_) {
+        throw std::logic_error("BurnedSession::answer called with no pending question");
+    }
+    const Subject& subject = *current_;
+    BurnedFeedback fb;
+
+    if (phase_ == Phase::Meaning) {
         std::optional<wk_api::StudyMaterial> material;
-        if (const auto it = material_by_id.find(id); it != material_by_id.end()) {
+        if (const auto it = material_by_id_.find(subject.id); it != material_by_id_.end()) {
             material = *it->second;
         }
-
-        const std::string label = "[" + type_label(subject) + "] ";
-        out << label << "What does \"" << display_name(subject) << "\" mean?\n> ";
-
-        std::string line;
-        if (!std::getline(in, line)) {
-            break;
-        }
-
-        const bool meaning_correct = matches_answer(line, subject, material);
-        if (meaning_correct) {
-            out << colorize("Correct!", kColorGreen, use_color) << "\n";
-        } else {
+        meaning_correct_ = matches_answer(line, subject, material);
+        fb.correct = meaning_correct_;
+        if (!meaning_correct_) {
             const std::vector<std::string> accepted = accepted_texts(subject, material);
             std::ostringstream joined;
             for (size_t i = 0; i < accepted.size(); ++i) {
                 joined << (i > 0 ? ", " : "") << accepted[i];
             }
-            out << colorize("Incorrect.", kColorRed, use_color) << " Accepted answer"
-                << (accepted.size() == 1 ? ": " : "s: ")
-                << (accepted.empty() ? display_name(subject) : joined.str()) << "\n";
+            fb.detail = std::string("Accepted answer") + (accepted.size() == 1 ? ": " : "s: ") +
+                        (accepted.empty() ? display_name(subject) : joined.str());
         }
-
-        bool reading_correct = true;
-        const std::vector<std::string> readings = accepted_readings(subject);
-        if (!readings.empty()) {
-            bool eof = false;
-            while (true) {
-                out << label << "What is the reading of \"" << display_name(subject) << "\"?\n> ";
-                if (!std::getline(in, line)) {
-                    eof = true;
-                    break;
-                }
-                if (!matches_reading(line, subject) && is_unaccepted_reading(line, subject)) {
-                    out << "That is a valid reading, but it isn't the one WaniKani wants for this "
-                        << type_name_lower(subject) << ". Try again.\n";
-                    continue;
-                }
-                break;
-            }
-            if (eof) {
-                break;
-            }
-            reading_correct = matches_reading(line, subject);
-            if (reading_correct) {
-                out << colorize("Correct!", kColorGreen, use_color) << "\n";
-            } else {
-                std::ostringstream joined;
-                for (size_t i = 0; i < readings.size(); ++i) {
-                    joined << (i > 0 ? ", " : "") << readings[i];
-                }
-                out << colorize("Incorrect.", kColorRed, use_color) << " Accepted reading"
-                    << (readings.size() == 1 ? ": " : "s: ") << joined.str() << "\n";
-            }
+        if (!accepted_readings(subject).empty()) {
+            phase_ = Phase::Reading;
+            return fb;
         }
-        const bool is_correct = meaning_correct && reading_correct;
-
-        std::optional<BurnedSrsState> current;
-        if (const auto it = state_by_id.find(id); it != state_by_id.end()) {
-            current = it->second;
-        }
-        store.upsert_burned_srs(advance_burned_srs(current, id, is_correct, now_or_clock(now_iso8601)));
-
-        ++asked;
-        if (is_correct) {
-            ++correct_count;
-        }
+        finish_subject(meaning_correct_);
+        return fb;
     }
 
-    out << correct_count << "/" << asked << " correct\n";
+    // Reading phase.
+    if (!matches_reading(line, subject) && is_unaccepted_reading(line, subject)) {
+        fb.retry = true;
+        fb.detail = "That is a valid reading, but it isn't the one WaniKani wants for this " +
+                    type_name_lower(subject) + ". Try again.";
+        return fb;
+    }
+    fb.correct = matches_reading(line, subject);
+    if (!fb.correct) {
+        const std::vector<std::string> readings = accepted_readings(subject);
+        std::ostringstream joined;
+        for (size_t i = 0; i < readings.size(); ++i) {
+            joined << (i > 0 ? ", " : "") << readings[i];
+        }
+        fb.detail = std::string("Accepted reading") + (readings.size() == 1 ? ": " : "s: ") + joined.str();
+    }
+    finish_subject(meaning_correct_ && fb.correct);
+    return fb;
+}
+
+void BurnedSession::finish_subject(bool is_correct) {
+    const long long id = current_->id;
+    std::optional<BurnedSrsState> current;
+    if (const auto it = state_by_id_.find(id); it != state_by_id_.end()) {
+        current = it->second;
+    }
+    store_.upsert_burned_srs(advance_burned_srs(current, id, is_correct, now_or_clock(now_)));
+    ++asked_;
+    if (is_correct) {
+        ++correct_;
+    }
+    current_ = nullptr;
 }

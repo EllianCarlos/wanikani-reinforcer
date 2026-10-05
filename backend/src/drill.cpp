@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <iomanip>
 #include <map>
+#include <stdexcept>
 #include <set>
 #include <sstream>
 #include <vector>
@@ -21,28 +22,6 @@
 // for "http" or "fetch_" to confirm -- there are none.
 
 namespace {
-
-// Raw ANSI escape codes -- no ncurses/terminal-capability library, per
-// the plan. Kept as file-local constants/helper (duplicated in
-// report.cpp) rather than shared via a new header, consistent with how
-// the rest of this codebase keeps small per-file helpers in anonymous
-// namespaces (see display_name's comment just below for the same
-// pattern).
-constexpr const char* kColorReset = "\033[0m";
-constexpr const char* kColorGreen = "\033[32m";
-constexpr const char* kColorRed = "\033[31m";
-
-// Wraps `text` in `code`...reset when use_color is true; returns `text`
-// unchanged otherwise (and always for an empty string). Because this only
-// ever wraps a whole segment rather than splicing into the middle of one,
-// a substring check against the plain text inside `text` still finds it
-// either way.
-std::string colorize(const std::string& text, const char* code, bool use_color) {
-    if (!use_color || text.empty()) {
-        return text;
-    }
-    return std::string(code) + text + kColorReset;
-}
 
 // Human-readable EdgeKind label for the "why was this drilled" line.
 // Deliberately separate from store.cpp's edge_kind_to_text (a DB
@@ -369,107 +348,11 @@ bool option_also_has_shown_text(const Subject& option, const std::string& shown_
     return false;
 }
 
-// Runs one forced-choice question about `pair`, quizzing on `a_id` (the
-// "correct" subject -- its meaning or reading is what's shown) with
-// `b_id` as the confusable pair member that also appears as an option.
-// `ask_reading` selects meaning vs reading; falls back to meaning if the
-// quizzed subject has no readings (radicals, or an incomplete sync).
-// Returns true iff the user answered correctly. Writes exactly one
-// drill_result row.
-bool run_forced_choice_question(const ConfusionPair& pair, bool ask_reading, int rotate_seed,
-                                 const std::vector<Subject>& all_subjects,
-                                 const std::map<long long, const Subject*>& subject_by_id,
-                                 const std::map<long long, const wk_api::StudyMaterial*>& study_material_by_id,
-                                 Store& store, std::istream& in, std::ostream& out, bool use_color,
-                                 bool& eof_hit) {
-    const Subject& correct_subject = *subject_by_id.at(pair.a_id);
-    const Subject& confusable_subject = *subject_by_id.at(pair.b_id);
-
-    bool used_reading = false;
-    std::string shown_text;
-    if (ask_reading) {
-        if (const Reading* r = primary_reading(correct_subject); r != nullptr) {
-            shown_text = r->reading;
-            used_reading = true;
-        }
-    }
-    if (!used_reading) {
-        const Meaning* m = primary_meaning(correct_subject);
-        shown_text = (m != nullptr) ? m->meaning : display_name(correct_subject);
-    }
-
-    const Subject* third = find_third_option(pair.a_id, pair.b_id, correct_subject.level, all_subjects,
-                                              subject_by_id, store);
-
-    std::vector<const Subject*> options = {&correct_subject, &confusable_subject};
-    if (third != nullptr) {
-        options.push_back(third);
-    }
-    // Rotate the option order deterministically (by question index)
-    // rather than randomly, so the correct answer isn't always printed
-    // first -- while staying fully reproducible for tests. Documented in
-    // drill.h.
-    const size_t rotate_amount = static_cast<size_t>(rotate_seed) % options.size();
-    std::rotate(options.begin(), options.begin() + static_cast<long>(rotate_amount), options.end());
-
-    size_t correct_index = 0;
-    for (size_t i = 0; i < options.size(); ++i) {
-        if (options[i]->id == correct_subject.id) {
-            correct_index = i;
-            break;
-        }
-    }
-
-    out << "Which one " << (used_reading ? "is read " : "means ") << "\"" << shown_text << "\"?  "
-        << join_options(options) << "\n> ";
-
-    std::string line;
-    if (!std::getline(in, line)) {
-        eof_hit = true;
-        return false;
-    }
-
-    const int chosen = parse_choice(line, options);
-    std::optional<wk_api::StudyMaterial> chosen_study_material;
-    if (chosen >= 0) {
-        const auto it = study_material_by_id.find(options[static_cast<size_t>(chosen)]->id);
-        if (it != study_material_by_id.end()) {
-            chosen_study_material = *it->second;
-        }
-    }
-    // Accept either the designated correct option or any other option
-    // that legitimately shares the shown reading/meaning -- see
-    // option_also_has_shown_text.
-    const bool is_correct =
-        chosen >= 0 && (static_cast<size_t>(chosen) == correct_index ||
-                        option_also_has_shown_text(*options[static_cast<size_t>(chosen)], shown_text,
-                                                    used_reading, chosen_study_material));
-
-    if (is_correct) {
-        out << colorize("Correct!", kColorGreen, use_color) << "\n";
-    } else {
-        const FailureKind failure_kind = used_reading ? FailureKind::Reading : FailureKind::Meaning;
-        std::optional<wk_api::StudyMaterial> study_material;
-        if (const auto it = study_material_by_id.find(correct_subject.id); it != study_material_by_id.end()) {
-            study_material = *it->second;
-        }
-        out << colorize("Incorrect.", kColorRed, use_color) << " The correct answer was: "
-            << display_name(correct_subject) << "\n";
-        out << first_advice_line(correct_subject, confusable_subject, pair.dominant_kind, failure_kind,
-                                  study_material, all_subjects)
-            << "\n";
-    }
-    out << drill_reason_line(pair) << "\n";
-
-    store.insert_drill_result({correct_subject.id, confusable_subject.id, is_correct, now_iso8601()});
-    return is_correct;
-}
-
 // Every text that would grade a production answer correct for `subject`:
 // its accepted-answer meanings (primary and non-primary) followed by
 // every StudyMaterial synonym, in that order. Feeds the wrong-answer
-// feedback line in run_production_question, so a user can see everything
-// that would have counted -- including their own custom synonyms.
+// feedback in DrillSession::answer, so a user can see everything that
+// would have counted -- including their own custom synonyms.
 std::vector<std::string> accepted_answer_texts(const Subject& subject,
                                                 const std::optional<wk_api::StudyMaterial>& study_material) {
     std::vector<std::string> texts;
@@ -484,57 +367,6 @@ std::vector<std::string> accepted_answer_texts(const Subject& subject,
         }
     }
     return texts;
-}
-
-// Runs one production question about `pair`: shows `a_id`'s characters
-// and asks for its meaning, matched via matches_answer. `b_id` is always
-// the distractor_id written to drill_result, per the brief. Returns true
-// iff the user answered correctly.
-bool run_production_question(const ConfusionPair& pair,
-                              const std::map<long long, const Subject*>& subject_by_id,
-                              const std::map<long long, const wk_api::StudyMaterial*>& study_material_by_id,
-                              const std::vector<Subject>& all_subjects, Store& store, std::istream& in,
-                              std::ostream& out, bool use_color, bool& eof_hit) {
-    const Subject& quizzed_subject = *subject_by_id.at(pair.a_id);
-    const Subject& confusable_subject = *subject_by_id.at(pair.b_id);
-
-    std::optional<wk_api::StudyMaterial> study_material;
-    if (const auto it = study_material_by_id.find(quizzed_subject.id); it != study_material_by_id.end()) {
-        study_material = *it->second;
-    }
-
-    out << "What does \"" << display_name(quizzed_subject) << "\" mean?\n> ";
-
-    std::string line;
-    if (!std::getline(in, line)) {
-        eof_hit = true;
-        return false;
-    }
-
-    const bool is_correct = matches_answer(line, quizzed_subject, study_material);
-
-    if (is_correct) {
-        out << colorize("Correct!", kColorGreen, use_color) << "\n";
-    } else {
-        const std::vector<std::string> accepted = accepted_answer_texts(quizzed_subject, study_material);
-        std::ostringstream accepted_joined;
-        for (size_t i = 0; i < accepted.size(); ++i) {
-            if (i > 0) {
-                accepted_joined << ", ";
-            }
-            accepted_joined << accepted[i];
-        }
-        out << colorize("Incorrect.", kColorRed, use_color) << " Accepted answer"
-            << (accepted.size() == 1 ? ": " : "s: ")
-            << (accepted.empty() ? display_name(quizzed_subject) : accepted_joined.str()) << "\n";
-        out << first_advice_line(quizzed_subject, confusable_subject, pair.dominant_kind, FailureKind::Meaning,
-                                  study_material, all_subjects)
-            << "\n";
-    }
-    out << drill_reason_line(pair) << "\n";
-
-    store.insert_drill_result({quizzed_subject.id, confusable_subject.id, is_correct, now_iso8601()});
-    return is_correct;
 }
 
 }  // namespace
@@ -594,71 +426,166 @@ bool matches_answer(const std::string& input, const Subject& subject,
     return false;
 }
 
-void run_drill(const std::vector<ConfusionPair>& pairs, const std::vector<Subject>& all_subjects,
-                const std::vector<wk_api::StudyMaterial>& study_materials, Store& store,
-                int question_count, std::istream& in, std::ostream& out, bool use_color,
-                const std::string& now_override) {
-    if (pairs.empty() || question_count <= 0) {
-        out << "Nothing to drill yet -- run 'wkr report' first to build up confusion pairs.\n";
-        return;
-    }
+DrillSession::DrillSession(std::vector<ConfusionPair> pairs, const std::vector<Subject>& all_subjects,
+                           const std::vector<wk_api::StudyMaterial>& study_materials, Store& store,
+                           int question_count, std::string now_override)
+    : pairs_(std::move(pairs)),
+      all_subjects_(all_subjects),
+      store_(store),
+      now_override_(std::move(now_override)),
+      subject_by_id_(index_subjects(all_subjects)),
+      study_material_by_id_(index_study_materials(study_materials)) {
+    total_ = (pairs_.empty() || question_count <= 0)
+                 ? 0
+                 : std::min(static_cast<size_t>(question_count), pairs_.size());
+}
 
-    const std::map<long long, const Subject*> subject_by_id = index_subjects(all_subjects);
-    const std::map<long long, const wk_api::StudyMaterial*> study_material_by_id =
-        index_study_materials(study_materials);
-
-    const size_t total = std::min(static_cast<size_t>(question_count), pairs.size());
-
-    int asked = 0;
-    int correct_count = 0;
-    int forced_choice_seen = 0;
-
-    for (size_t i = 0; i < total; ++i) {
-        const ConfusionPair& pair = pairs[i];
-        if (subject_by_id.find(pair.a_id) == subject_by_id.end() ||
-            subject_by_id.find(pair.b_id) == subject_by_id.end()) {
+std::optional<DrillQuestion> DrillSession::next() {
+    pending_.reset();
+    while (cursor_ < total_) {
+        const size_t i = cursor_++;
+        const ConfusionPair& pair = pairs_[i];
+        if (subject_by_id_.find(pair.a_id) == subject_by_id_.end() ||
+            subject_by_id_.find(pair.b_id) == subject_by_id_.end()) {
             continue;  // subject not synced (shouldn't happen); skip rather than crash
         }
 
+        Pending p;
+        p.pair_index = i;
+        p.correct = subject_by_id_.at(pair.a_id);
+        p.confusable = subject_by_id_.at(pair.b_id);
         // Alternate question type by overall question index: forced-
         // choice, production, forced-choice, ... (see drill.h).
-        const bool is_forced_choice = (i % 2 == 0);
-        bool eof_hit = false;
-        bool is_correct = false;
+        p.forced_choice = (i % 2 == 0);
 
-        if (is_forced_choice) {
+        DrillQuestion q;
+        q.index = static_cast<int>(i);
+        q.total = static_cast<int>(total_);
+        if (p.forced_choice) {
             // Alternate meaning/reading prompts across forced-choice
             // questions specifically (a separate counter from the
             // type-alternation index above), documented in drill.h.
-            const bool ask_reading = (forced_choice_seen % 2 == 1);
-            ++forced_choice_seen;
-            is_correct = run_forced_choice_question(pair, ask_reading, static_cast<int>(i), all_subjects,
-                                                      subject_by_id, study_material_by_id, store, in, out,
-                                                      use_color, eof_hit);
-        } else {
-            is_correct = run_production_question(pair, subject_by_id, study_material_by_id, all_subjects,
-                                                   store, in, out, use_color, eof_hit);
-        }
+            const bool ask_reading = (forced_choice_seen_ % 2 == 1);
+            ++forced_choice_seen_;
 
-        if (eof_hit) {
-            break;
-        }
-
-        ++asked;
-        if (is_correct) {
-            ++correct_count;
-        }
-
-        const std::string now = now_override.empty() ? now_iso8601() : now_override;
-        std::optional<PairSrsState> current;
-        for (const auto& state : store.all_pair_srs()) {
-            if (state.a_id == std::min(pair.a_id, pair.b_id) && state.b_id == std::max(pair.a_id, pair.b_id)) {
-                current = state;
-                break;
+            if (ask_reading) {
+                if (const Reading* r = primary_reading(*p.correct); r != nullptr) {
+                    p.shown_text = r->reading;
+                    p.used_reading = true;
+                }
             }
+            if (!p.used_reading) {
+                const Meaning* m = primary_meaning(*p.correct);
+                p.shown_text = (m != nullptr) ? m->meaning : display_name(*p.correct);
+            }
+
+            const Subject* third = find_third_option(pair.a_id, pair.b_id, p.correct->level, all_subjects_,
+                                                      subject_by_id_, store_);
+            p.options = {p.correct, p.confusable};
+            if (third != nullptr) {
+                p.options.push_back(third);
+            }
+            // Rotate the option order deterministically (by question
+            // index) rather than randomly, so the correct answer isn't
+            // always printed first -- while staying fully reproducible
+            // for tests. Documented in drill.h.
+            const size_t rotate_amount = i % p.options.size();
+            std::rotate(p.options.begin(), p.options.begin() + static_cast<long>(rotate_amount),
+                        p.options.end());
+            for (size_t k = 0; k < p.options.size(); ++k) {
+                if (p.options[k]->id == p.correct->id) {
+                    p.correct_index = k;
+                    break;
+                }
+            }
+
+            q.kind = DrillQuestion::Kind::ForcedChoice;
+            q.asks_reading = p.used_reading;
+            q.shown_text = p.shown_text;
+            for (const Subject* o : p.options) {
+                q.options.push_back(display_name(*o));
+            }
+            q.prompt = std::string("Which one ") + (p.used_reading ? "is read " : "means ") + "\"" +
+                       p.shown_text + "\"?  " + join_options(p.options);
+        } else {
+            q.kind = DrillQuestion::Kind::Production;
+            q.prompt = "What does \"" + display_name(*p.correct) + "\" mean?";
         }
-        store.upsert_pair_srs(advance_pair_srs(current, pair.a_id, pair.b_id, is_correct, now));
+        pending_ = std::move(p);
+        return q;
+    }
+    return std::nullopt;
+}
+
+DrillFeedback DrillSession::answer(const std::string& line) {
+    if (!pending_.has_value()) {
+        throw std::logic_error("DrillSession::answer called with no pending question");
+    }
+    const Pending p = *pending_;
+    pending_.reset();
+    const ConfusionPair& pair = pairs_[p.pair_index];
+
+    std::optional<wk_api::StudyMaterial> study_material;
+    if (const auto it = study_material_by_id_.find(p.correct->id); it != study_material_by_id_.end()) {
+        study_material = *it->second;
     }
 
-    out << correct_count << "/" << asked << " correct\n";
+    DrillFeedback fb;
+    if (p.forced_choice) {
+        const int chosen = parse_choice(line, p.options);
+        std::optional<wk_api::StudyMaterial> chosen_study_material;
+        if (chosen >= 0) {
+            const auto it = study_material_by_id_.find(p.options[static_cast<size_t>(chosen)]->id);
+            if (it != study_material_by_id_.end()) {
+                chosen_study_material = *it->second;
+            }
+        }
+        // Accept either the designated correct option or any other option
+        // that legitimately shares the shown reading/meaning -- see
+        // option_also_has_shown_text.
+        fb.correct =
+            chosen >= 0 && (static_cast<size_t>(chosen) == p.correct_index ||
+                            option_also_has_shown_text(*p.options[static_cast<size_t>(chosen)], p.shown_text,
+                                                        p.used_reading, chosen_study_material));
+        if (!fb.correct) {
+            fb.detail = "The correct answer was: " + display_name(*p.correct);
+            fb.advice = first_advice_line(*p.correct, *p.confusable, pair.dominant_kind,
+                                          p.used_reading ? FailureKind::Reading : FailureKind::Meaning,
+                                          study_material, all_subjects_);
+        }
+    } else {
+        fb.correct = matches_answer(line, *p.correct, study_material);
+        if (!fb.correct) {
+            const std::vector<std::string> accepted = accepted_answer_texts(*p.correct, study_material);
+            std::ostringstream joined;
+            for (size_t k = 0; k < accepted.size(); ++k) {
+                if (k > 0) {
+                    joined << ", ";
+                }
+                joined << accepted[k];
+            }
+            fb.detail = std::string("Accepted answer") + (accepted.size() == 1 ? ": " : "s: ") +
+                        (accepted.empty() ? display_name(*p.correct) : joined.str());
+            fb.advice = first_advice_line(*p.correct, *p.confusable, pair.dominant_kind, FailureKind::Meaning,
+                                          study_material, all_subjects_);
+        }
+    }
+    fb.reason = drill_reason_line(pair);
+
+    store_.insert_drill_result({p.correct->id, p.confusable->id, fb.correct, now_iso8601()});
+
+    ++asked_;
+    if (fb.correct) {
+        ++correct_;
+    }
+    const std::string now = now_override_.empty() ? now_iso8601() : now_override_;
+    std::optional<PairSrsState> current;
+    for (const auto& state : store_.all_pair_srs()) {
+        if (state.a_id == std::min(pair.a_id, pair.b_id) && state.b_id == std::max(pair.a_id, pair.b_id)) {
+            current = state;
+            break;
+        }
+    }
+    store_.upsert_pair_srs(advance_pair_srs(current, pair.a_id, pair.b_id, fb.correct, now));
+    return fb;
 }

@@ -7,6 +7,7 @@
 #include <tuple>
 
 #include "drill.h"
+#include "stream_runner.h"
 #include "model.h"
 #include "store.h"
 #include "wk_api.h"

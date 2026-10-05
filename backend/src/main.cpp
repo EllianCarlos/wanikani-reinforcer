@@ -6,17 +6,14 @@
 #include <exception>
 #include <iostream>
 #include <optional>
-#include <set>
 #include <string>
 #include <vector>
 
-#include "burned.h"
 #include "config.h"
 #include "confusion.h"
-#include "drill.h"
 #include "model.h"
 #include "report.h"
-#include "srs.h"
+#include "rpc.h"
 #include "stats.h"
 #include "store.h"
 #include "sync.h"
@@ -105,87 +102,8 @@ int run_report() {
     }
 }
 
-// Named distinctly from drill.h's run_drill (which this wraps) to avoid
-// two same-named functions with different signatures living in the same
-// translation unit -- confusing even though legal overloading.
-int run_drill_command(int question_count) {
-    try {
-        Config config = Config::load();
-        Store store(config.db_path);
-
-        const std::vector<Subject> subjects = store.all_subjects();
-        if (subjects.empty()) {
-            std::cout << "No data yet — run 'wkr sync' first." << std::endl;
-            return 0;
-        }
-
-        const std::vector<ReviewStat> latest_stats = store.latest_stat_per_subject();
-        const std::vector<Session> sessions = store.all_sessions();
-        const std::vector<FailureEvent> events = store.all_failure_events();
-        const std::vector<SimilarityEdge> edges = store.all_similarity_edges();
-        const std::vector<Assignment> assignments = store.all_assignments();
-        (void)assignments;  // loaded for parity with `report`'s data-loading pattern; unused by drill
-        const std::vector<wk_api::StudyMaterial> study_materials = store.all_study_materials();
-
-        const std::vector<LeechEntry> leeches = compute_leech_scores(latest_stats);
-        const std::vector<ConfusionPair> pairs =
-            compute_confusion_pairs(sessions, events, edges, leeches, now_iso8601());
-
-        if (pairs.empty()) {
-            std::cout << "No confusion pairs yet — keep reviewing and run 'wkr sync' again." << std::endl;
-            return 0;
-        }
-
-        const std::string now = now_iso8601();
-        const std::vector<PairSrsState> srs_states = store.all_pair_srs();
-        const std::vector<ConfusionPair> due_pairs = select_due_pairs(pairs, srs_states, now);
-        if (due_pairs.empty()) {
-            std::cout << nothing_due_message(pairs, srs_states, now) << std::endl;
-            return 0;
-        }
-
-        run_drill(due_pairs, subjects, study_materials, store, question_count, std::cin, std::cout,
-                  stdout_is_tty(), now);
-        return 0;
-    } catch (const std::exception& e) {
-        std::cerr << "error: " << e.what() << std::endl;
-        return 1;
-    }
-}
-
-int run_burned_command(int question_count, const std::set<std::string>& included_types) {
-    try {
-        Config config = Config::load();
-        Store store(config.db_path);
-
-        const std::vector<Subject> subjects = store.all_subjects();
-        if (subjects.empty()) {
-            std::cout << "No data yet — run 'wkr sync' first." << std::endl;
-            return 0;
-        }
-
-        const std::vector<Assignment> assignments = store.all_assignments();
-        const std::vector<BurnedSrsState> states = store.all_burned_srs();
-        const std::string now = now_iso8601();
-
-        const std::vector<long long> due = select_due_burned(assignments, states, now, included_types);
-        if (due.empty()) {
-            std::cout << burned_nothing_due_message(assignments, states, now, included_types)
-                      << std::endl;
-            return 0;
-        }
-
-        run_burned_review(due, subjects, store.all_study_materials(), store, question_count, std::cin,
-                          std::cout, stdout_is_tty(), now);
-        return 0;
-    } catch (const std::exception& e) {
-        std::cerr << "error: " << e.what() << std::endl;
-        return 1;
-    }
-}
-
 // Named distinctly from stats.h's print_stats (which this wraps), same
-// reasoning as run_drill_command/run_report above.
+// reasoning as run_report above.
 int run_stats_command() {
     try {
         Config config = Config::load();
@@ -222,8 +140,27 @@ int run_stats_command() {
     }
 }
 
+// The `wkr serve` command: line-delimited JSON-RPC over stdin/stdout for a
+// frontend (see rpc.h / docs/protocol.md). Diagnostics go to stderr only,
+// so stdout stays a clean protocol channel.
+int run_serve_command() {
+    try {
+        Config config = Config::load();
+        Store store(config.db_path);
+        RpcServer server(store, [&config, &store](int session_gap_minutes) {
+            config.require_token();
+            return run_sync(store, live_sync_fetchers(), session_gap_minutes);
+        });
+        server.serve(std::cin, std::cout);
+        return 0;
+    } catch (const std::exception& e) {
+        std::cerr << "error: " << e.what() << std::endl;
+        return 1;
+    }
+}
+
 void print_usage() {
-    std::cerr << "usage: wkr <sync [--session-gap-minutes N]|report|drill [--count N]|burned [--count N] [--only TYPES] [--exclude TYPES]|stats>" << std::endl;
+    std::cerr << "usage: wkr <sync [--session-gap-minutes N]|report|stats|serve>" << std::endl;
 }
 
 constexpr int kDefaultSessionGapMinutes = 45;
@@ -250,39 +187,6 @@ int parse_session_gap_minutes(int argc, char** argv) {
     return kDefaultSessionGapMinutes;
 }
 
-// Parses `--count N` out of argv[2..], following the same convention as
-// parse_session_gap_minutes above. Returns kDefaultDrillQuestionCount if
-// the flag is absent.
-int parse_drill_count(int argc, char** argv) {
-    for (int i = 2; i < argc; ++i) {
-        const std::string arg = argv[i];
-        if (arg == "--count") {
-            if (i + 1 >= argc) {
-                throw std::runtime_error("--count requires a value");
-            }
-            const std::string value = argv[i + 1];
-            try {
-                return std::stoi(value);
-            } catch (const std::exception&) {
-                throw std::runtime_error("--count value must be an integer, got: " + value);
-            }
-        }
-    }
-    return kDefaultDrillQuestionCount;
-}
-
-std::string parse_string_flag(int argc, char** argv, const std::string& name) {
-    for (int i = 2; i < argc; ++i) {
-        if (name == argv[i]) {
-            if (i + 1 >= argc) {
-                throw std::runtime_error(name + " requires a value");
-            }
-            return argv[i + 1];
-        }
-    }
-    return "";
-}
-
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -303,27 +207,11 @@ int main(int argc, char** argv) {
     if (command == "report") {
         return run_report();
     }
-    if (command == "drill") {
-        try {
-            return run_drill_command(parse_drill_count(argc, argv));
-        } catch (const std::exception& e) {
-            std::cerr << "error: " << e.what() << std::endl;
-            return 1;
-        }
-    }
-    if (command == "burned") {
-        try {
-            return run_burned_command(
-                parse_drill_count(argc, argv),
-                resolve_burned_types(parse_string_flag(argc, argv, "--only"),
-                                     parse_string_flag(argc, argv, "--exclude")));
-        } catch (const std::exception& e) {
-            std::cerr << "error: " << e.what() << std::endl;
-            return 1;
-        }
-    }
     if (command == "stats") {
         return run_stats_command();
+    }
+    if (command == "serve") {
+        return run_serve_command();
     }
 
     print_usage();

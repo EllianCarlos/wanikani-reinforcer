@@ -4,6 +4,7 @@
 #include <sstream>
 
 #include "burned.h"
+#include "stream_runner.h"
 #include "model.h"
 #include "store.h"
 

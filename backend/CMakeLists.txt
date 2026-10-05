@@ -28,6 +28,9 @@ add_library(wkr_lib STATIC
     src/srs.cpp
     src/burned.cpp
     src/kana.cpp
+    src/app.cpp
+    src/json_codec.cpp
+    src/rpc.cpp
 )
 target_include_directories(wkr_lib PUBLIC src)
 target_link_libraries(wkr_lib PUBLIC
@@ -36,8 +39,8 @@ target_link_libraries(wkr_lib PUBLIC
     nlohmann_json::nlohmann_json
 )
 
-add_executable(wkr src/main.cpp)
-target_link_libraries(wkr PRIVATE wkr_lib)
+add_executable(wkr-core src/main.cpp)
+target_link_libraries(wkr-core PRIVATE wkr_lib)
 
 enable_testing()
 find_package(Catch2 3 REQUIRED)
@@ -57,6 +60,8 @@ add_executable(wkr_tests
     tests/test_burned.cpp
     tests/test_kana.cpp
     tests/test_integration.cpp
+    tests/test_rpc.cpp
+    tests/stream_runner.cpp
 )
 target_link_libraries(wkr_tests PRIVATE wkr_lib Catch2::Catch2WithMain)
 

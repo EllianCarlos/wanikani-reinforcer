@@ -1,6 +1,7 @@
 #pragma once
 
 #include <ostream>
+#include <string>
 #include <vector>
 
 #include "model.h"
@@ -9,6 +10,39 @@
 // How many leeches (top of the descending leech_score ranking) get a
 // block printed. Named per the brief rather than left as a magic 10.
 constexpr int kReportTopN = 10;
+
+// Structured form of one report block, shared by the text renderer and the
+// dashboard RPC. `neighbors_heading` is empty when there are no look-alikes;
+// `advice` is empty when no confusion pair involves the leech.
+struct ReportNeighbor {
+    long long subject_id = 0;
+    std::string characters;
+    std::string meaning;
+    std::string srs_label;
+};
+
+struct ReportEntry {
+    long long subject_id = 0;
+    std::string characters;
+    std::string meanings;
+    int percentage_correct = 0;
+    std::string srs_stage_name;
+    bool fails_meaning = false;
+    std::string neighbors_heading;
+    std::vector<ReportNeighbor> neighbors;
+    std::string advice;
+};
+
+// Top kReportTopN leeches resolved into display data (what print_report
+// renders). Leeches whose subject isn't synced are skipped.
+std::vector<ReportEntry> build_report(const std::vector<ConfusionPair>& pairs,
+                                       const std::vector<LeechEntry>& leeches,
+                                       const std::vector<Subject>& all_subjects,
+                                       const std::vector<Assignment>& all_assignments,
+                                       const std::vector<wk_api::StudyMaterial>& all_study_materials,
+                                       const std::vector<ReviewStat>& latest_stats,
+                                       const std::vector<PairSrsState>& pair_srs = {},
+                                       const std::string& now_iso8601 = "");
 
 // Renders the `wkr report` terminal output: one block per leech (top
 // kReportTopN, descending leech_score), each showing its meaning/reading

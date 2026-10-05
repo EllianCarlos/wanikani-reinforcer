@@ -9,6 +9,7 @@
 
 #include "confusion.h"
 #include "drill.h"
+#include "stream_runner.h"
 #include "model.h"
 #include "report.h"
 #include "similarity.h"

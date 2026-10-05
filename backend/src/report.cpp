@@ -124,36 +124,43 @@ std::string srs_label(long long a_id, long long b_id, const std::vector<PairSrsS
     return "[" + describe_pair_srs(found, now_iso8601) + "]";
 }
 
-void print_neighbor_list(std::ostream& out, const std::vector<const ConfusionPair*>& list,
-                          long long leech_id, const std::map<long long, const Subject*>& subject_by_id,
-                          const std::vector<PairSrsState>& pair_srs, const std::string& now_iso8601) {
+// Up to kMaxShown neighbors from `list` (already sorted descending by
+// score), resolved to display data.
+std::vector<ReportNeighbor> collect_neighbors(const std::vector<const ConfusionPair*>& list,
+                                               long long leech_id,
+                                               const std::map<long long, const Subject*>& subject_by_id,
+                                               const std::vector<PairSrsState>& pair_srs,
+                                               const std::string& now_iso8601) {
     constexpr size_t kMaxShown = 4;
-    std::vector<const Subject*> neighbors;
-    std::vector<std::string> labels;
+    std::vector<ReportNeighbor> neighbors;
     for (size_t i = 0; i < list.size() && i < kMaxShown; ++i) {
         const long long neighbor_id = (list[i]->a_id == leech_id) ? list[i]->b_id : list[i]->a_id;
         const auto it = subject_by_id.find(neighbor_id);
         if (it != subject_by_id.end()) {
-            neighbors.push_back(it->second);
-            labels.push_back(srs_label(leech_id, neighbor_id, pair_srs, now_iso8601));
+            neighbors.push_back({neighbor_id, display_name(*it->second), primary_meaning_text(*it->second),
+                                 srs_label(leech_id, neighbor_id, pair_srs, now_iso8601)});
         }
     }
+    return neighbors;
+}
+
+// Column-aligned "chars meaning [srs]" line, indented 3 spaces, e.g.
+// "    大 big [..]    犬 dog [..]".
+void print_neighbor_list(std::ostream& out, const std::vector<ReportNeighbor>& neighbors) {
     if (neighbors.empty()) {
         return;
     }
-
     int max_width = 0;
-    for (const auto* s : neighbors) {
-        max_width = std::max(max_width, display_width(display_name(*s)));
+    for (const auto& n : neighbors) {
+        max_width = std::max(max_width, display_width(n.characters));
     }
-
     out << "   ";
     for (size_t i = 0; i < neighbors.size(); ++i) {
         if (i > 0) {
             out << "  ";
         }
-        out << " " << pad_to_width(display_name(*neighbors[i]), max_width) << " "
-            << primary_meaning_text(*neighbors[i]) << " " << labels[i];
+        out << " " << pad_to_width(neighbors[i].characters, max_width) << " " << neighbors[i].meaning << " "
+            << neighbors[i].srs_label;
     }
     out << "\n";
 }
@@ -170,17 +177,14 @@ void print_indented(std::ostream& out, const std::string& text, const std::strin
 
 }  // namespace
 
-void print_report(const std::vector<ConfusionPair>& pairs, const std::vector<LeechEntry>& leeches,
-                   const std::vector<Subject>& all_subjects,
-                   const std::vector<Assignment>& all_assignments,
-                   const std::vector<wk_api::StudyMaterial>& all_study_materials,
-                   const std::vector<ReviewStat>& latest_stats, std::ostream& out, bool use_color,
-                   const std::vector<PairSrsState>& pair_srs, const std::string& now_iso8601) {
-    if (leeches.empty()) {
-        out << "No leeches found yet. Keep reviewing and run 'wkr sync' again.\n";
-        return;
-    }
-
+std::vector<ReportEntry> build_report(const std::vector<ConfusionPair>& pairs,
+                                       const std::vector<LeechEntry>& leeches,
+                                       const std::vector<Subject>& all_subjects,
+                                       const std::vector<Assignment>& all_assignments,
+                                       const std::vector<wk_api::StudyMaterial>& all_study_materials,
+                                       const std::vector<ReviewStat>& latest_stats,
+                                       const std::vector<PairSrsState>& pair_srs,
+                                       const std::string& now_iso8601) {
     std::map<long long, const Subject*> subject_by_id;
     for (const auto& s : all_subjects) {
         subject_by_id[s.id] = &s;
@@ -198,18 +202,8 @@ void print_report(const std::vector<ConfusionPair>& pairs, const std::vector<Lee
         percentage_by_subject[stat.subject_id] = stat.percentage_correct;
     }
 
+    std::vector<ReportEntry> entries;
     const size_t shown = std::min(leeches.size(), static_cast<size_t>(kReportTopN));
-
-    // Column-align the LEECH line's `characters` field across every
-    // block being printed this run, not just within one line.
-    int max_chars_width = 0;
-    for (size_t i = 0; i < shown; ++i) {
-        const auto it = subject_by_id.find(leeches[i].subject_id);
-        if (it != subject_by_id.end()) {
-            max_chars_width = std::max(max_chars_width, display_width(display_name(*it->second)));
-        }
-    }
-
     for (size_t i = 0; i < shown; ++i) {
         const LeechEntry& leech = leeches[i];
         const auto subject_it = subject_by_id.find(leech.subject_id);
@@ -218,17 +212,15 @@ void print_report(const std::vector<ConfusionPair>& pairs, const std::vector<Lee
         }
         const Subject& subject = *subject_it->second;
 
-        const int percentage =
+        ReportEntry entry;
+        entry.subject_id = leech.subject_id;
+        entry.characters = display_name(subject);
+        entry.meanings = meanings_summary(subject);
+        entry.percentage_correct =
             percentage_by_subject.count(leech.subject_id) ? percentage_by_subject.at(leech.subject_id) : 0;
-        const int srs_stage =
-            srs_stage_by_subject.count(leech.subject_id) ? srs_stage_by_subject.at(leech.subject_id) : 0;
-
-        out << colorize("LEECH", kColorBoldRed, use_color) << "  "
-            << colorize(pad_to_width(display_name(subject), max_chars_width), kColorBoldRed, use_color)
-            << "  " << meanings_summary(subject) << "   " << percentage << "% correct   "
-            << srs_stage_name(srs_stage) << "\n";
-        out << "  You fail the " << (leech.is_meaning ? "MEANING" : "READING") << ", not the "
-            << (leech.is_meaning ? "reading" : "meaning") << ".\n";
+        entry.srs_stage_name = srs_stage_name(
+            srs_stage_by_subject.count(leech.subject_id) ? srs_stage_by_subject.at(leech.subject_id) : 0);
+        entry.fails_meaning = leech.is_meaning;
 
         std::vector<const ConfusionPair*> relevant;
         for (const auto& p : pairs) {
@@ -241,13 +233,12 @@ void print_report(const std::vector<ConfusionPair>& pairs, const std::vector<Lee
         for (const auto* p : relevant) {
             (p->likely ? likely_list : co_failure).push_back(p);
         }
-
         if (!co_failure.empty()) {
-            out << "  Look-alikes you also failed today:\n";
-            print_neighbor_list(out, co_failure, leech.subject_id, subject_by_id, pair_srs, now_iso8601);
+            entry.neighbors_heading = "Look-alikes you also failed today:";
+            entry.neighbors = collect_neighbors(co_failure, leech.subject_id, subject_by_id, pair_srs, now_iso8601);
         } else if (!likely_list.empty()) {
-            out << "  Likely confused with:\n";
-            print_neighbor_list(out, likely_list, leech.subject_id, subject_by_id, pair_srs, now_iso8601);
+            entry.neighbors_heading = "Likely confused with:";
+            entry.neighbors = collect_neighbors(likely_list, leech.subject_id, subject_by_id, pair_srs, now_iso8601);
         }
 
         // `pairs` (and therefore `relevant`, built by a single forward
@@ -264,13 +255,52 @@ void print_report(const std::vector<ConfusionPair>& pairs, const std::vector<Lee
                 if (sm_it != study_material_by_subject.end()) {
                     study_material = *sm_it->second;
                 }
-                const std::string advice = generate_advice(subject, *neighbor_it->second, top->dominant_kind,
-                                                             failure_kind, study_material, all_subjects);
-                out << colorize("  Focus:", kColorCyan, use_color) << "\n";
-                print_indented(out, advice, "    ");
+                entry.advice = generate_advice(subject, *neighbor_it->second, top->dominant_kind, failure_kind,
+                                               study_material, all_subjects);
             }
         }
+        entries.push_back(std::move(entry));
+    }
+    return entries;
+}
 
+void print_report(const std::vector<ConfusionPair>& pairs, const std::vector<LeechEntry>& leeches,
+                   const std::vector<Subject>& all_subjects,
+                   const std::vector<Assignment>& all_assignments,
+                   const std::vector<wk_api::StudyMaterial>& all_study_materials,
+                   const std::vector<ReviewStat>& latest_stats, std::ostream& out, bool use_color,
+                   const std::vector<PairSrsState>& pair_srs, const std::string& now_iso8601) {
+    if (leeches.empty()) {
+        out << "No leeches found yet. Keep reviewing and run 'wkr sync' again.\n";
+        return;
+    }
+
+    const std::vector<ReportEntry> entries = build_report(pairs, leeches, all_subjects, all_assignments,
+                                                           all_study_materials, latest_stats, pair_srs,
+                                                           now_iso8601);
+
+    // Column-align the LEECH line's `characters` field across every
+    // block being printed this run, not just within one line.
+    int max_chars_width = 0;
+    for (const auto& e : entries) {
+        max_chars_width = std::max(max_chars_width, display_width(e.characters));
+    }
+
+    for (const auto& e : entries) {
+        out << colorize("LEECH", kColorBoldRed, use_color) << "  "
+            << colorize(pad_to_width(e.characters, max_chars_width), kColorBoldRed, use_color) << "  "
+            << e.meanings << "   " << e.percentage_correct << "% correct   " << e.srs_stage_name << "\n";
+        out << "  You fail the " << (e.fails_meaning ? "MEANING" : "READING") << ", not the "
+            << (e.fails_meaning ? "reading" : "meaning") << ".\n";
+
+        if (!e.neighbors_heading.empty()) {
+            out << "  " << e.neighbors_heading << "\n";
+            print_neighbor_list(out, e.neighbors);
+        }
+        if (!e.advice.empty()) {
+            out << colorize("  Focus:", kColorCyan, use_color) << "\n";
+            print_indented(out, e.advice, "    ");
+        }
         out << "\n";
     }
 }
