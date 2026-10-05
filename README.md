@@ -70,8 +70,8 @@ build is a clean build.
 
 ```sh
 wkr sync [--session-gap-minutes N]   # pull subjects/stats/assignments from WaniKani, detect failures
-wkr report                           # print your current leeches, confusion pairs, and focus advice
-wkr drill [--count N]                # run an interactive local quiz over your top confusion pairs
+wkr report                           # print your current leeches, confusion pairs (with local SRS stage), and focus advice
+wkr drill [--count N]                # run an interactive local quiz over the confusion pairs that are due
 wkr stats                            # print local drill history, session summary, and leech accuracy trend
 ```
 
@@ -84,6 +84,16 @@ wkr stats                            # print local drill history, session summar
   the SQLite database `wkr sync` populated, and they don't need an API
   token configured at all (only `wkr sync` does). `--count` controls how
   many questions `wkr drill` asks; it defaults to 5.
+- `wkr drill` schedules each confusion pair with its own local
+  spaced-repetition stage (stored in the `pair_srs` table; it never touches
+  your WaniKani SRS). A pair you have just drilled is not asked again until
+  it is due, and when nothing is due the command prints when the next
+  review is and exits without asking anything. Stages 1 to 8 come back
+  after 4h, 8h, 1d, 2d, 7d, 14d, 30d and 120d; a correct answer moves up
+  one stage, an incorrect one drops two (never below stage 1), and a
+  correct answer on stage 8 burns the pair, which is then never asked
+  again. `wkr report` shows each look-alike's stage, e.g. `[new]`,
+  `[stage 3, due in 2d]` or `[burned]`.
 - `wkr stats` is purely local, like `wkr report`/`wkr drill`. It needs at
   least one `wkr drill` run for drill-history stats, at least one `wkr
   sync` for session stats, and at least two separate `wkr sync` runs on
