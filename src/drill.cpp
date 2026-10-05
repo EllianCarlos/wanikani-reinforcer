@@ -9,6 +9,7 @@
 #include <map>
 #include <set>
 #include <sstream>
+#include <vector>
 
 #include "advice.h"
 #include "srs.h"
@@ -108,16 +109,64 @@ std::string lower(const std::string& s) {
     return out;
 }
 
+size_t whitespace_length_at(const std::string& s, size_t pos) {
+    if (std::isspace(static_cast<unsigned char>(s[pos])) != 0) {
+        return 1;
+    }
+    if (s.compare(pos, 2, "\xC2\xA0") == 0) {
+        return 2;
+    }
+    if (s.compare(pos, 3, "\xE3\x80\x80") == 0) {
+        return 3;
+    }
+    return 0;
+}
+
+std::vector<std::string> split_words(const std::string& s) {
+    std::vector<std::string> words;
+    std::string current;
+    size_t i = 0;
+    while (i < s.size()) {
+        const size_t skip = whitespace_length_at(s, i);
+        if (skip > 0) {
+            if (!current.empty()) {
+                words.push_back(std::move(current));
+                current.clear();
+            }
+            i += skip;
+        } else {
+            current += s[i++];
+        }
+    }
+    if (!current.empty()) {
+        words.push_back(std::move(current));
+    }
+    return words;
+}
+
 std::string trim(const std::string& s) {
-    size_t begin = 0;
-    while (begin < s.size() && std::isspace(static_cast<unsigned char>(s[begin]))) {
-        ++begin;
+    const std::vector<std::string> words = split_words(s);
+    std::string out;
+    for (size_t i = 0; i < words.size(); ++i) {
+        if (i > 0) {
+            out += ' ';
+        }
+        out += words[i];
     }
-    size_t end = s.size();
-    while (end > begin && std::isspace(static_cast<unsigned char>(s[end - 1]))) {
-        --end;
+    return out;
+}
+
+std::string answer_key(const std::string& s) {
+    std::vector<std::string> words = split_words(lower(s));
+    std::sort(words.begin(), words.end());
+    std::string key;
+    for (size_t i = 0; i < words.size(); ++i) {
+        if (i > 0) {
+            key += ' ';
+        }
+        key += words[i];
     }
-    return s.substr(begin, end - begin);
+    return key;
 }
 
 // Current UTC time in WaniKani-style ISO-8601 ("2026-08-16T03:14:07Z").
@@ -511,35 +560,32 @@ int levenshtein_distance(const std::string& a, const std::string& b) {
 
 bool matches_answer(const std::string& input, const Subject& subject,
                      const std::optional<wk_api::StudyMaterial>& study_material) {
-    const std::string trimmed_input = lower(trim(input));
-    if (trimmed_input.empty()) {
+    const std::string input_key = answer_key(input);
+    if (input_key.empty()) {
         return false;
     }
 
     std::vector<std::string> candidates;
     for (const auto& m : subject.meanings) {
         if (m.accepted_answer) {
-            candidates.push_back(lower(trim(m.meaning)));
+            candidates.push_back(answer_key(m.meaning));
         }
     }
     if (study_material.has_value()) {
         for (const auto& synonym : study_material->meaning_synonyms) {
-            candidates.push_back(lower(trim(synonym)));
+            candidates.push_back(answer_key(synonym));
         }
     }
 
     for (const auto& candidate : candidates) {
-        if (candidate == trimmed_input) {
+        if (candidate == input_key) {
             return true;
         }
     }
 
-    // Typo tolerance (matching WaniKani's own behavior): only kicks in
-    // for longer typed answers, gated on the *input's* length so short
-    // words (e.g. "cat"/"car") can't accidentally fuzzy-match each other.
-    if (trimmed_input.size() > 4) {
+    if (input_key.size() > 4) {
         for (const auto& candidate : candidates) {
-            if (levenshtein_distance(candidate, trimmed_input) <= 1) {
+            if (levenshtein_distance(candidate, input_key) <= 1) {
                 return true;
             }
         }

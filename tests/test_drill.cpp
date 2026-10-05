@@ -553,3 +553,48 @@ TEST_CASE("run_drill leaves SRS state untouched when input hits EOF before an an
 
     CHECK(store.all_pair_srs().empty());
 }
+
+// --- answer normalisation --------------------------------------------
+
+TEST_CASE("matches_answer ignores word order and a stray extra space", "[drill]") {
+    Subject stand_up;
+    stand_up.meanings = {Meaning{"To Stand Something Up", true, true}};
+
+    CHECK(matches_answer("To Stand something up", stand_up, std::nullopt));
+    CHECK(matches_answer("to stand up something", stand_up, std::nullopt));
+    CHECK(matches_answer("stand something up to", stand_up, std::nullopt));
+    CHECK(matches_answer("to  stand   up something", stand_up, std::nullopt));
+    CHECK_FALSE(matches_answer("to stand something", stand_up, std::nullopt));
+}
+
+TEST_CASE("matches_answer trims tabs, carriage returns, non-breaking and ideographic spaces",
+          "[drill]") {
+    Subject fat;
+    fat.meanings = {Meaning{"fat", true, true}};
+
+    CHECK(matches_answer("\tfat\r", fat, std::nullopt));
+    CHECK(matches_answer("\xC2\xA0" "fat" "\xC2\xA0", fat, std::nullopt));
+    CHECK(matches_answer("\xE3\x80\x80" "fat" "\xE3\x80\x80", fat, std::nullopt));
+}
+
+TEST_CASE("matches_answer applies the same normalisation to StudyMaterial synonyms", "[drill]") {
+    Subject fat;
+    fat.meanings = {Meaning{"fat", true, true}};
+    wk_api::StudyMaterial material;
+    material.meaning_synonyms = {"big boned"};
+
+    CHECK(matches_answer("  Boned   BIG ", fat, material));
+}
+
+TEST_CASE("run_drill trims the forced-choice answer, including a trailing carriage return", "[drill]") {
+    const std::string db_path = temp_db_path("trim_choice");
+    std::filesystem::remove(db_path);
+    Store store(db_path);
+
+    std::istringstream in("\xE3\x80\x80" "1\r\n");
+    std::ostringstream out;
+    run_drill({make_pair(2, 1)}, make_fixture_subjects(), /*study_materials=*/{}, store,
+              /*question_count=*/1, in, out, /*use_color=*/false, "2026-08-16T00:00:00Z");
+
+    CHECK(out.str().find("Correct!") != std::string::npos);
+}
