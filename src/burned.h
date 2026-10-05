@@ -19,6 +19,8 @@ BurnedSrsState advance_burned_srs(const std::optional<BurnedSrsState>& current, 
 
 bool matches_reading(const std::string& input, const Subject& subject);
 
+bool is_unaccepted_reading(const std::string& input, const Subject& subject);
+
 std::set<std::string> resolve_burned_types(const std::string& only, const std::string& exclude);
 
 std::vector<long long> select_due_burned(const std::vector<Assignment>& assignments,

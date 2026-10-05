@@ -119,6 +119,22 @@ std::vector<std::string> accepted_texts(const Subject& subject,
 
 }  // namespace
 
+std::string type_name_lower(const Subject& subject) {
+    if (subject.type == "radical") {
+        return "radical";
+    }
+    if (subject.type == "kanji") {
+        return "kanji";
+    }
+    return "vocabulary";
+}
+
+std::string type_label(const Subject& subject) {
+    std::string name = type_name_lower(subject);
+    name[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(name[0])));
+    return name;
+}
+
 std::vector<std::string> accepted_readings(const Subject& subject) {
     std::vector<std::string> readings;
     for (const auto& r : subject.readings) {
@@ -136,6 +152,19 @@ bool matches_reading(const std::string& input, const Subject& subject) {
     }
     for (const auto& reading : accepted_readings(subject)) {
         if (to_hiragana(reading) == typed) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool is_unaccepted_reading(const std::string& input, const Subject& subject) {
+    const std::string typed = to_hiragana(input);
+    if (typed.empty()) {
+        return false;
+    }
+    for (const auto& reading : subject.readings) {
+        if (!reading.accepted_answer && to_hiragana(reading.reading) == typed) {
             return true;
         }
     }
@@ -266,7 +295,8 @@ void run_burned_review(const std::vector<long long>& subject_ids, const std::vec
             material = *it->second;
         }
 
-        out << "What does \"" << display_name(subject) << "\" mean?\n> ";
+        const std::string label = "[" + type_label(subject) + "] ";
+        out << label << "What does \"" << display_name(subject) << "\" mean?\n> ";
 
         std::string line;
         if (!std::getline(in, line)) {
@@ -290,8 +320,21 @@ void run_burned_review(const std::vector<long long>& subject_ids, const std::vec
         bool reading_correct = true;
         const std::vector<std::string> readings = accepted_readings(subject);
         if (!readings.empty()) {
-            out << "What is the reading of \"" << display_name(subject) << "\"?\n> ";
-            if (!std::getline(in, line)) {
+            bool eof = false;
+            while (true) {
+                out << label << "What is the reading of \"" << display_name(subject) << "\"?\n> ";
+                if (!std::getline(in, line)) {
+                    eof = true;
+                    break;
+                }
+                if (!matches_reading(line, subject) && is_unaccepted_reading(line, subject)) {
+                    out << "That is a valid reading, but it isn't the one WaniKani wants for this "
+                        << type_name_lower(subject) << ". Try again.\n";
+                    continue;
+                }
+                break;
+            }
+            if (eof) {
                 break;
             }
             reading_correct = matches_reading(line, subject);

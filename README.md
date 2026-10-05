@@ -102,7 +102,11 @@ wkr stats                            # print local drill history, session summar
   first (same answer matching as `wkr drill`) and then, for kanji and
   vocabulary, its reading, always in that order and one item at a time.
   Readings can be typed in hiragana, katakana or romaji (`inu`, `nihon`,
-  `gakkou`). An item only counts as correct when both answers are right.
+  `gakkou`). Every prompt is tagged `[Radical]`, `[Kanji]` or
+  `[Vocabulary]`, since the same characters can exist as all three. If you
+  type a real reading that WaniKani doesn't accept for that subject (e.g.
+  こ for the kanji 子), you get a hint and the same question again, not a
+  miss. An item only counts as correct when both answers are right.
   It keeps its own schedule in the `burned_srs` table: a correct answer
   returns the item after 30d, 60d, 120d and then 240d (staying there),
   while a miss brings it back after 1d. Items you

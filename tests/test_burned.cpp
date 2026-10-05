@@ -328,3 +328,101 @@ TEST_CASE("EOF before the reading answer leaves the item unscheduled", "[burned]
 
     CHECK(store.all_burned_srs().empty());
 }
+
+namespace {
+
+Subject make_child_kanji() {
+    Subject s = make_subject(462, "子", "Child");
+    s.type = "kanji";
+    s.readings = {Reading{"し", true, true}, Reading{"す", false, true}, Reading{"こ", false, false}};
+    return s;
+}
+
+}  // namespace
+
+TEST_CASE("is_unaccepted_reading recognises a real reading WaniKani does not accept", "[burned]") {
+    const Subject child = make_child_kanji();
+
+    CHECK(is_unaccepted_reading("こ", child));
+    CHECK(is_unaccepted_reading("ko", child));
+    CHECK_FALSE(is_unaccepted_reading("し", child));
+    CHECK_FALSE(is_unaccepted_reading("neko", child));
+    CHECK_FALSE(is_unaccepted_reading("", child));
+}
+
+TEST_CASE("a non-accepted reading is retried without counting as a miss", "[burned]") {
+    const std::string db_path = temp_db_path("retry");
+    std::filesystem::remove(db_path);
+    Store store(db_path);
+
+    std::istringstream in("child\nこ\nshi\n");
+    std::ostringstream out;
+    run_burned_review({462}, {make_child_kanji()}, {}, store, 5, in, out, false, kNow);
+
+    const std::string output = out.str();
+    CAPTURE(output);
+    const size_t first_ask = output.find("What is the reading of \"子\"?");
+    REQUIRE(first_ask != std::string::npos);
+    CHECK(output.find("What is the reading of \"子\"?", first_ask + 1) != std::string::npos);
+    CHECK(output.find("isn't the one WaniKani wants for this kanji") != std::string::npos);
+    CHECK(output.find("Incorrect. Accepted reading") == std::string::npos);
+    CHECK(output.find("1/1 correct") != std::string::npos);
+
+    const std::vector<BurnedSrsState> states = store.all_burned_srs();
+    REQUIRE(states.size() == 1);
+    CHECK(states[0].stage == 1);
+}
+
+TEST_CASE("a wrong reading after a retry still fails the item", "[burned]") {
+    const std::string db_path = temp_db_path("retry_wrong");
+    std::filesystem::remove(db_path);
+    Store store(db_path);
+
+    std::istringstream in("child\nこ\nneko\n");
+    std::ostringstream out;
+    run_burned_review({462}, {make_child_kanji()}, {}, store, 5, in, out, false, kNow);
+
+    CHECK(out.str().find("Incorrect. Accepted readings: し, す") != std::string::npos);
+    CHECK(out.str().find("0/1 correct") != std::string::npos);
+}
+
+TEST_CASE("EOF during a reading retry leaves the item unscheduled", "[burned]") {
+    const std::string db_path = temp_db_path("retry_eof");
+    std::filesystem::remove(db_path);
+    Store store(db_path);
+
+    std::istringstream in("child\nこ\n");
+    std::ostringstream out;
+    run_burned_review({462}, {make_child_kanji()}, {}, store, 5, in, out, false, kNow);
+
+    CHECK(store.all_burned_srs().empty());
+}
+
+TEST_CASE("every burned prompt names the subject type", "[burned]") {
+    const std::string db_path = temp_db_path("type_label");
+    std::filesystem::remove(db_path);
+    Store store(db_path);
+
+    Subject radical = make_subject(34, "子", "Child");
+    radical.type = "radical";
+    Subject kanji = make_child_kanji();
+    Subject vocab = make_subject(2513, "子", "Child");
+    vocab.type = "vocabulary";
+    vocab.readings = {Reading{"こ", true, true}};
+    Subject kana = make_subject(9, "ありがとう", "Thank You");
+    kana.type = "kana_vocabulary";
+
+    std::istringstream in("child\nchild\nshi\nchild\nko\nthank you\n");
+    std::ostringstream out;
+    run_burned_review({34, 462, 2513, 9}, {radical, kanji, vocab, kana}, {}, store, 5, in, out, false,
+                      kNow);
+
+    const std::string output = out.str();
+    CAPTURE(output);
+    CHECK(output.find("[Radical] What does \"子\" mean?") != std::string::npos);
+    CHECK(output.find("[Kanji] What does \"子\" mean?") != std::string::npos);
+    CHECK(output.find("[Kanji] What is the reading of \"子\"?") != std::string::npos);
+    CHECK(output.find("[Vocabulary] What does \"子\" mean?") != std::string::npos);
+    CHECK(output.find("[Vocabulary] What is the reading of \"子\"?") != std::string::npos);
+    CHECK(output.find("[Vocabulary] What does \"ありがとう\" mean?") != std::string::npos);
+}
