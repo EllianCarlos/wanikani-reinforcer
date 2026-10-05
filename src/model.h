@@ -1,6 +1,7 @@
 #pragma once
 
 #include <chrono>
+#include <format>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -235,6 +236,11 @@ inline std::optional<std::chrono::system_clock::time_point> parse_wk_timestamp(
         return std::nullopt;
     }
     return std::chrono::time_point_cast<std::chrono::system_clock::duration>(tp);
+}
+
+inline std::string format_wk_timestamp(std::chrono::system_clock::time_point tp) {
+    return std::format("{:%Y-%m-%dT%H:%M:%S}Z",
+                       std::chrono::time_point_cast<std::chrono::seconds>(tp));
 }
 
 // Classifies a review-statistics update into zero or one failure events.
