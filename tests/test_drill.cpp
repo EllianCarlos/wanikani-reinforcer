@@ -503,3 +503,53 @@ TEST_CASE("run_drill prints why each question was picked: edge kind, likely vs c
     CHECK(output.find("Drilled because: WaniKani flags these as visually similar, a likely guess (not yet "
                        "observed together) -- score 0.40") != std::string::npos);
 }
+
+// --- SRS scheduling --------------------------------------------------
+
+TEST_CASE("run_drill schedules a correctly answered pair at stage 1 due in 4 hours", "[drill][srs]") {
+    const std::string db_path = temp_db_path("srs_correct");
+    std::filesystem::remove(db_path);
+    Store store(db_path);
+
+    std::istringstream in("1\n");
+    std::ostringstream out;
+    run_drill({make_pair(2, 1)}, make_fixture_subjects(), /*study_materials=*/{}, store,
+              /*question_count=*/1, in, out, /*use_color=*/false, "2026-08-16T00:00:00Z");
+
+    const std::vector<PairSrsState> states = store.all_pair_srs();
+    REQUIRE(states.size() == 1);
+    CHECK(states[0].a_id == 1);
+    CHECK(states[0].b_id == 2);
+    CHECK(states[0].stage == 1);
+    CHECK(states[0].due_at == "2026-08-16T04:00:00Z");
+}
+
+TEST_CASE("run_drill drops an existing pair two stages on an incorrect answer", "[drill][srs]") {
+    const std::string db_path = temp_db_path("srs_incorrect");
+    std::filesystem::remove(db_path);
+    Store store(db_path);
+    store.upsert_pair_srs(PairSrsState{1, 2, 4, "2026-08-10T00:00:00Z", "2026-08-08T00:00:00Z"});
+
+    std::istringstream in("2\n");
+    std::ostringstream out;
+    run_drill({make_pair(2, 1)}, make_fixture_subjects(), /*study_materials=*/{}, store,
+              /*question_count=*/1, in, out, /*use_color=*/false, "2026-08-16T00:00:00Z");
+
+    const std::vector<PairSrsState> states = store.all_pair_srs();
+    REQUIRE(states.size() == 1);
+    CHECK(states[0].stage == 2);
+    CHECK(states[0].due_at == "2026-08-16T08:00:00Z");
+}
+
+TEST_CASE("run_drill leaves SRS state untouched when input hits EOF before an answer", "[drill][srs]") {
+    const std::string db_path = temp_db_path("srs_eof");
+    std::filesystem::remove(db_path);
+    Store store(db_path);
+
+    std::istringstream in("");
+    std::ostringstream out;
+    run_drill({make_pair(2, 1)}, make_fixture_subjects(), /*study_materials=*/{}, store,
+              /*question_count=*/1, in, out, /*use_color=*/false, "2026-08-16T00:00:00Z");
+
+    CHECK(store.all_pair_srs().empty());
+}

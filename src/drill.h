@@ -68,4 +68,5 @@ bool matches_answer(const std::string& input, const Subject& subject,
 // to pass true, gated on an isatty() check of the real terminal.
 void run_drill(const std::vector<ConfusionPair>& pairs, const std::vector<Subject>& all_subjects,
                 const std::vector<wk_api::StudyMaterial>& study_materials, Store& store,
-                int question_count, std::istream& in, std::ostream& out, bool use_color = false);
+                int question_count, std::istream& in, std::ostream& out, bool use_color = false,
+                const std::string& now_iso8601 = "");

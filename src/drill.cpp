@@ -11,6 +11,7 @@
 #include <sstream>
 
 #include "advice.h"
+#include "srs.h"
 
 // NOTE ON THE "SENDS NOTHING TO WANIKANI" GUARANTEE: this file never
 // includes/calls anything from http.h or wk_api.h's fetch_* functions.
@@ -549,7 +550,8 @@ bool matches_answer(const std::string& input, const Subject& subject,
 
 void run_drill(const std::vector<ConfusionPair>& pairs, const std::vector<Subject>& all_subjects,
                 const std::vector<wk_api::StudyMaterial>& study_materials, Store& store,
-                int question_count, std::istream& in, std::ostream& out, bool use_color) {
+                int question_count, std::istream& in, std::ostream& out, bool use_color,
+                const std::string& now_override) {
     if (pairs.empty() || question_count <= 0) {
         out << "Nothing to drill yet -- run 'wkr report' first to build up confusion pairs.\n";
         return;
@@ -600,6 +602,16 @@ void run_drill(const std::vector<ConfusionPair>& pairs, const std::vector<Subjec
         if (is_correct) {
             ++correct_count;
         }
+
+        const std::string now = now_override.empty() ? now_iso8601() : now_override;
+        std::optional<PairSrsState> current;
+        for (const auto& state : store.all_pair_srs()) {
+            if (state.a_id == std::min(pair.a_id, pair.b_id) && state.b_id == std::max(pair.a_id, pair.b_id)) {
+                current = state;
+                break;
+            }
+        }
+        store.upsert_pair_srs(advance_pair_srs(current, pair.a_id, pair.b_id, is_correct, now));
     }
 
     out << correct_count << "/" << asked << " correct\n";
