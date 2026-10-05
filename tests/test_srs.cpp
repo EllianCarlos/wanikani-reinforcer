@@ -123,3 +123,30 @@ TEST_CASE("describe_pair_srs covers new, scheduled, due and burned pairs", "[srs
           "stage 3, due now");
     CHECK(describe_pair_srs(make_state(1, 2, kSrsBurnedStage, ""), kNow) == "burned");
 }
+
+TEST_CASE("nothing_due_message names the wait until the next review", "[srs]") {
+    const std::vector<ConfusionPair> pairs = {make_pair(1, 2, 9.0), make_pair(3, 4, 8.0)};
+    const std::vector<PairSrsState> states = {
+        make_state(1, 2, 2, "2026-08-16T08:00:00Z"),
+        make_state(3, 4, 1, "2026-08-16T03:20:00Z"),
+    };
+
+    CHECK(nothing_due_message(pairs, states, kNow) == "Nothing due. Next review in 3h 20m.");
+}
+
+TEST_CASE("nothing_due_message reports a fully burned queue", "[srs]") {
+    const std::vector<ConfusionPair> pairs = {make_pair(1, 2, 9.0)};
+    const std::vector<PairSrsState> states = {make_state(1, 2, kSrsBurnedStage, "")};
+
+    CHECK(nothing_due_message(pairs, states, kNow) ==
+          "Nothing due -- every confusion pair is burned.");
+}
+
+TEST_CASE("a drilled pair is skipped on the next selection and returns once its due time passes",
+          "[srs]") {
+    const std::vector<ConfusionPair> pairs = {make_pair(1, 2, 9.0)};
+    const PairSrsState drilled = advance_pair_srs(std::nullopt, 1, 2, true, kNow);
+
+    CHECK(select_due_pairs(pairs, {drilled}, kNow).empty());
+    CHECK(select_due_pairs(pairs, {drilled}, "2026-08-16T04:00:00Z").size() == 1);
+}

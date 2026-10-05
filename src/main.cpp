@@ -14,6 +14,7 @@
 #include "drill.h"
 #include "model.h"
 #include "report.h"
+#include "srs.h"
 #include "stats.h"
 #include "store.h"
 #include "sync.h"
@@ -133,8 +134,16 @@ int run_drill_command(int question_count) {
             return 0;
         }
 
-        run_drill(pairs, subjects, study_materials, store, question_count, std::cin, std::cout,
-                  stdout_is_tty());
+        const std::string now = now_iso8601();
+        const std::vector<PairSrsState> srs_states = store.all_pair_srs();
+        const std::vector<ConfusionPair> due_pairs = select_due_pairs(pairs, srs_states, now);
+        if (due_pairs.empty()) {
+            std::cout << nothing_due_message(pairs, srs_states, now) << std::endl;
+            return 0;
+        }
+
+        run_drill(due_pairs, subjects, study_materials, store, question_count, std::cin, std::cout,
+                  stdout_is_tty(), now);
         return 0;
     } catch (const std::exception& e) {
         std::cerr << "error: " << e.what() << std::endl;

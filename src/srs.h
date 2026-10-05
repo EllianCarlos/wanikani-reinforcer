@@ -22,3 +22,7 @@ std::string format_wait(const std::string& due_at, const std::string& now_iso860
 
 std::string describe_pair_srs(const std::optional<PairSrsState>& state,
                               const std::string& now_iso8601);
+
+std::string nothing_due_message(const std::vector<ConfusionPair>& pairs,
+                                const std::vector<PairSrsState>& states,
+                                const std::string& now_iso8601);

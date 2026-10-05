@@ -142,3 +142,13 @@ std::string describe_pair_srs(const std::optional<PairSrsState>& state,
     }
     return prefix + "due in " + format_wait(state->due_at, now_iso8601);
 }
+
+std::string nothing_due_message(const std::vector<ConfusionPair>& pairs,
+                                const std::vector<PairSrsState>& states,
+                                const std::string& now_iso8601) {
+    const std::optional<std::string> next = next_due_at(pairs, states);
+    if (!next.has_value()) {
+        return "Nothing due -- every confusion pair is burned.";
+    }
+    return "Nothing due. Next review in " + format_wait(*next, now_iso8601) + ".";
+}

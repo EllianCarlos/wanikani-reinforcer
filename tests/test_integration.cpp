@@ -13,6 +13,7 @@
 #include "report.h"
 #include "similarity.h"
 #include "stats.h"
+#include "srs.h"
 #include "store.h"
 #include "sync.h"
 #include "wk_api.h"
@@ -342,4 +343,34 @@ TEST_CASE("sync still skips the graph rebuild when nothing changed and a graph a
     const SyncSummary second = fixture_sync(store, /*subjects=*/{}, /*stats=*/{});
     CHECK(second.similarity_edge_count == -1);  // -1 == "skipped, nothing changed"
     CHECK_FALSE(store.all_similarity_edges().empty());
+}
+
+TEST_CASE("a second drill over the same pairs finds nothing due until the SRS interval passes",
+          "[integration][srs]") {
+    const std::string db_path = temp_db_path("srs_second_drill");
+    std::filesystem::remove(db_path);
+    Store store(db_path);
+
+    fixture_sync(store, fixture_subjects(), fixture_stats());
+
+    const std::vector<Subject> all_subjects = store.all_subjects();
+    const std::vector<LeechEntry> leeches = compute_leech_scores(store.latest_stat_per_subject());
+    const std::vector<ConfusionPair> pairs =
+        compute_confusion_pairs(store.all_sessions(), store.all_failure_events(),
+                                store.all_similarity_edges(), leeches, "2026-08-16T00:00:00Z");
+    REQUIRE_FALSE(pairs.empty());
+
+    const std::string first_drill_time = "2026-08-16T00:00:00Z";
+    REQUIRE(select_due_pairs(pairs, store.all_pair_srs(), first_drill_time).size() == pairs.size());
+
+    std::istringstream drill_in("1\n");
+    std::ostringstream drill_out;
+    run_drill(pairs, all_subjects, /*study_materials=*/{}, store, /*question_count=*/1, drill_in,
+              drill_out, /*use_color=*/false, first_drill_time);
+
+    const std::vector<PairSrsState> states = store.all_pair_srs();
+    CHECK(select_due_pairs(pairs, states, first_drill_time).empty());
+    CHECK(nothing_due_message(pairs, states, first_drill_time) ==
+          "Nothing due. Next review in 4h.");
+    CHECK(select_due_pairs(pairs, states, "2026-08-16T04:00:00Z").size() == pairs.size());
 }
