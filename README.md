@@ -97,11 +97,15 @@ wkr stats                            # print local drill history, session summar
   again. `wkr report` shows each look-alike's stage, e.g. `[new]`,
   `[stage 3, due in 2d]` or `[burned]`.
 - `wkr burned` is an extra review of subjects WaniKani reports as burned
-  (SRS stage 9), which WaniKani itself never shows again. It asks the
-  meaning of up to `--count` (default 5) of them, using the same answer
-  matching as `wkr drill`, and keeps its own schedule in the `burned_srs`
-  table: a correct answer returns the item after 30d, 60d, 120d and then
-  240d (staying there), while a miss brings it back after 1d. Items you
+  (SRS stage 9), which WaniKani itself never shows again. It reviews
+  up to `--count` (default 5) of them. Each item is asked its meaning
+  first (same answer matching as `wkr drill`) and then, for kanji and
+  vocabulary, its reading, always in that order and one item at a time.
+  Readings can be typed in hiragana, katakana or romaji (`inu`, `nihon`,
+  `gakkou`). An item only counts as correct when both answers are right.
+  It keeps its own schedule in the `burned_srs` table: a correct answer
+  returns the item after 30d, 60d, 120d and then 240d (staying there),
+  while a miss brings it back after 1d. Items you
   have never reviewed here are due immediately. `--only` and `--exclude`
   take a comma-separated list of `radical`, `kanji` and `vocabulary`
   (which includes kana-only vocabulary) to narrow the review, e.g.

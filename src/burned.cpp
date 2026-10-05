@@ -11,6 +11,7 @@
 #include <stdexcept>
 
 #include "drill.h"
+#include "kana.h"
 #include "srs.h"
 
 namespace {
@@ -117,6 +118,29 @@ std::vector<std::string> accepted_texts(const Subject& subject,
 }
 
 }  // namespace
+
+std::vector<std::string> accepted_readings(const Subject& subject) {
+    std::vector<std::string> readings;
+    for (const auto& r : subject.readings) {
+        if (r.accepted_answer) {
+            readings.push_back(r.reading);
+        }
+    }
+    return readings;
+}
+
+bool matches_reading(const std::string& input, const Subject& subject) {
+    const std::string typed = to_hiragana(input);
+    if (typed.empty()) {
+        return false;
+    }
+    for (const auto& reading : accepted_readings(subject)) {
+        if (to_hiragana(reading) == typed) {
+            return true;
+        }
+    }
+    return false;
+}
 
 std::set<std::string> resolve_burned_types(const std::string& only, const std::string& exclude) {
     std::set<std::string> types = parse_type_list(only);
@@ -249,8 +273,8 @@ void run_burned_review(const std::vector<long long>& subject_ids, const std::vec
             break;
         }
 
-        const bool is_correct = matches_answer(line, subject, material);
-        if (is_correct) {
+        const bool meaning_correct = matches_answer(line, subject, material);
+        if (meaning_correct) {
             out << colorize("Correct!", kColorGreen, use_color) << "\n";
         } else {
             const std::vector<std::string> accepted = accepted_texts(subject, material);
@@ -262,6 +286,27 @@ void run_burned_review(const std::vector<long long>& subject_ids, const std::vec
                 << (accepted.size() == 1 ? ": " : "s: ")
                 << (accepted.empty() ? display_name(subject) : joined.str()) << "\n";
         }
+
+        bool reading_correct = true;
+        const std::vector<std::string> readings = accepted_readings(subject);
+        if (!readings.empty()) {
+            out << "What is the reading of \"" << display_name(subject) << "\"?\n> ";
+            if (!std::getline(in, line)) {
+                break;
+            }
+            reading_correct = matches_reading(line, subject);
+            if (reading_correct) {
+                out << colorize("Correct!", kColorGreen, use_color) << "\n";
+            } else {
+                std::ostringstream joined;
+                for (size_t i = 0; i < readings.size(); ++i) {
+                    joined << (i > 0 ? ", " : "") << readings[i];
+                }
+                out << colorize("Incorrect.", kColorRed, use_color) << " Accepted reading"
+                    << (readings.size() == 1 ? ": " : "s: ") << joined.str() << "\n";
+            }
+        }
+        const bool is_correct = meaning_correct && reading_correct;
 
         std::optional<BurnedSrsState> current;
         if (const auto it = state_by_id.find(id); it != state_by_id.end()) {

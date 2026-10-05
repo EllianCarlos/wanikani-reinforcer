@@ -217,3 +217,114 @@ TEST_CASE("resolve_burned_types rejects unknown names and an empty result", "[bu
     CHECK_THROWS_AS(resolve_burned_types("", "grammar"), std::runtime_error);
     CHECK_THROWS_AS(resolve_burned_types("kanji", "kanji"), std::runtime_error);
 }
+
+namespace {
+
+Subject make_kanji(long long id, const std::string& characters, const std::string& meaning,
+                   const std::string& reading) {
+    Subject s = make_subject(id, characters, meaning);
+    s.type = "kanji";
+    s.readings = {Reading{reading, true, true}};
+    return s;
+}
+
+}  // namespace
+
+TEST_CASE("matches_reading accepts kana, katakana and romaji for an accepted reading", "[burned]") {
+    const Subject dog = make_kanji(1, "犬", "Dog", "いぬ");
+
+    CHECK(matches_reading("いぬ", dog));
+    CHECK(matches_reading("イヌ", dog));
+    CHECK(matches_reading("inu", dog));
+    CHECK(matches_reading("  Inu ", dog));
+    CHECK_FALSE(matches_reading("neko", dog));
+    CHECK_FALSE(matches_reading("", dog));
+}
+
+TEST_CASE("matches_reading ignores readings that are not accepted answers", "[burned]") {
+    Subject s = make_kanji(1, "日", "Day", "にち");
+    s.readings.push_back(Reading{"ひ", false, false});
+
+    CHECK(matches_reading("nichi", s));
+    CHECK_FALSE(matches_reading("hi", s));
+}
+
+TEST_CASE("run_burned_review asks the meaning and then the reading of each item, in that order",
+          "[burned]") {
+    const std::string db_path = temp_db_path("reading_order");
+    std::filesystem::remove(db_path);
+    Store store(db_path);
+
+    const std::vector<Subject> subjects = {make_kanji(1, "犬", "Dog", "いぬ"),
+                                           make_kanji(2, "太", "Fat", "ふとい")};
+
+    std::istringstream in("dog\ninu\nfat\nfutoi\n");
+    std::ostringstream out;
+    run_burned_review({1, 2}, subjects, {}, store, 5, in, out, false, kNow);
+
+    const std::string output = out.str();
+    CAPTURE(output);
+    const size_t dog_meaning = output.find("What does \"犬\" mean?");
+    const size_t dog_reading = output.find("What is the reading of \"犬\"?");
+    const size_t fat_meaning = output.find("What does \"太\" mean?");
+    const size_t fat_reading = output.find("What is the reading of \"太\"?");
+    REQUIRE(dog_meaning != std::string::npos);
+    REQUIRE(dog_reading != std::string::npos);
+    REQUIRE(fat_meaning != std::string::npos);
+    REQUIRE(fat_reading != std::string::npos);
+    CHECK(dog_meaning < dog_reading);
+    CHECK(dog_reading < fat_meaning);
+    CHECK(fat_meaning < fat_reading);
+    CHECK(output.find("2/2 correct") != std::string::npos);
+}
+
+TEST_CASE("a wrong reading fails the item even when the meaning was right", "[burned]") {
+    const std::string db_path = temp_db_path("reading_wrong");
+    std::filesystem::remove(db_path);
+    Store store(db_path);
+
+    const std::vector<Subject> subjects = {make_kanji(1, "犬", "Dog", "いぬ")};
+
+    std::istringstream in("dog\nneko\n");
+    std::ostringstream out;
+    run_burned_review({1}, subjects, {}, store, 5, in, out, false, kNow);
+
+    const std::string output = out.str();
+    CAPTURE(output);
+    CHECK(output.find("Incorrect. Accepted reading: いぬ") != std::string::npos);
+    CHECK(output.find("0/1 correct") != std::string::npos);
+
+    const std::vector<BurnedSrsState> states = store.all_burned_srs();
+    REQUIRE(states.size() == 1);
+    CHECK(states[0].stage == 0);
+}
+
+TEST_CASE("an item without readings gets only the meaning question", "[burned]") {
+    const std::string db_path = temp_db_path("reading_none");
+    std::filesystem::remove(db_path);
+    Store store(db_path);
+
+    Subject radical = make_subject(1, "一", "Ground");
+    radical.type = "radical";
+
+    std::istringstream in("ground\n");
+    std::ostringstream out;
+    run_burned_review({1}, {radical}, {}, store, 5, in, out, false, kNow);
+
+    CHECK(out.str().find("reading") == std::string::npos);
+    CHECK(out.str().find("1/1 correct") != std::string::npos);
+}
+
+TEST_CASE("EOF before the reading answer leaves the item unscheduled", "[burned]") {
+    const std::string db_path = temp_db_path("reading_eof");
+    std::filesystem::remove(db_path);
+    Store store(db_path);
+
+    const std::vector<Subject> subjects = {make_kanji(1, "犬", "Dog", "いぬ")};
+
+    std::istringstream in("dog\n");
+    std::ostringstream out;
+    run_burned_review({1}, subjects, {}, store, 5, in, out, false, kNow);
+
+    CHECK(store.all_burned_srs().empty());
+}

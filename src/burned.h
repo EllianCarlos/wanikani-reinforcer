@@ -17,6 +17,8 @@ constexpr int kDefaultBurnedQuestionCount = 5;
 BurnedSrsState advance_burned_srs(const std::optional<BurnedSrsState>& current, long long subject_id,
                                   bool correct, const std::string& now_iso8601);
 
+bool matches_reading(const std::string& input, const Subject& subject);
+
 std::set<std::string> resolve_burned_types(const std::string& only, const std::string& exclude);
 
 std::vector<long long> select_due_burned(const std::vector<Assignment>& assignments,
